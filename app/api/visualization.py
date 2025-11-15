@@ -11,7 +11,7 @@ from app.services.map_manager import MapManager, get_map_manager
 from app.services.robot_manager import RobotManager, get_robot_manager
 from app.services.task_scheduler import TaskScheduler, get_task_scheduler
 from app.services.path_planner import PathPlanner
-from app.models.robot import Pose
+from app.models.robot import Pose, RobotStatus
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -550,68 +550,96 @@ async def get_visualization_data(
                     })
             logger.debug(f"Loaded {len(virtual_walls)} virtual walls from cache")
         
-        # 如果虚拟墙缓存为空，尝试快速从机器人获取（但设置短超时，不阻塞首页）
+        # 如果虚拟墙缓存为空，尝试快速从在线机器人获取（但设置短超时，不阻塞首页）
         # 注意：即使获取失败，也立即返回空数组，让首页快速加载
         if not virtual_walls:
-            logger.debug(f"Virtual walls cache is empty, attempting quick fetch from robots (with short timeout to avoid blocking homepage)")
+            logger.debug(f"Virtual walls cache is empty, attempting quick fetch from online robots (with short timeout to avoid blocking homepage)")
             robot_ids = robot_manager.list_robots()
             if robot_ids:
-                # 只尝试第一个机器人，使用短超时（2秒），快速失败，不阻塞首页
-                robot_id = robot_ids[0]
-                try:
-                    robot_agent = robot_manager.get_robot_agent(robot_id)
-                    if robot_agent:
-                        robot_ip = getattr(robot_agent, 'base_url', 'unknown')
-                        logger.debug(f"Quick fetch virtual walls from robot {robot_id} at {robot_ip} (timeout=2s)")
-                        
-                        # 直接从机器人获取虚拟墙，使用短超时，快速失败
-                        try:
-                            walls = await asyncio.wait_for(
-                                robot_agent.get_virtual_walls(),
-                                timeout=2.0  # 减少到2秒，快速失败，不阻塞首页
-                            )
+                # 尝试从所有在线机器人获取虚拟墙，优先使用在线的机器人
+                # 设置总体超时时间（最多尝试5秒），避免阻塞首页
+                fetch_start_time = asyncio.get_event_loop().time()
+                max_total_time = 5.0  # 最多尝试5秒
+                
+                for robot_id in robot_ids:
+                    # 检查是否超过总体超时时间
+                    if asyncio.get_event_loop().time() - fetch_start_time > max_total_time:
+                        logger.debug(f"Virtual walls fetch timeout ({max_total_time}s), stopping attempts")
+                        break
+                    
+                    # 快速检查机器人是否在线（使用缓存状态，不阻塞）
+                    try:
+                        robot_state = await asyncio.wait_for(
+                            robot_manager.get_robot_state(robot_id, force_update=False),
+                            timeout=0.3  # 快速检查，使用缓存状态
+                        )
+                        # 如果机器人离线，跳过
+                        if not robot_state or robot_state.status == RobotStatus.OFFLINE:
+                            logger.debug(f"Robot {robot_id} is offline, skipping virtual walls fetch")
+                            continue
+                    except (asyncio.TimeoutError, Exception) as e:
+                        logger.debug(f"Failed to check robot {robot_id} status: {e}, trying anyway")
+                    
+                    # 尝试从在线机器人获取虚拟墙
+                    try:
+                        robot_agent = robot_manager.get_robot_agent(robot_id)
+                        if robot_agent:
+                            robot_ip = getattr(robot_agent, 'base_url', 'unknown')
+                            logger.debug(f"Quick fetch virtual walls from robot {robot_id} at {robot_ip} (timeout=2s)")
                             
-                            if walls and len(walls) > 0:
-                                logger.debug(f"Received {len(walls)} VirtualWall objects from robot {robot_id} at {robot_ip}")
+                            # 直接从机器人获取虚拟墙，使用短超时，快速失败
+                            try:
+                                walls = await asyncio.wait_for(
+                                    robot_agent.get_virtual_walls(),
+                                    timeout=2.0  # 减少到2秒，快速失败，不阻塞首页
+                                )
                                 
-                                # 更新缓存（转换为字典格式）
-                                try:
-                                    map_manager.virtual_walls = [wall.dict() if hasattr(wall, 'dict') else wall for wall in walls]
-                                except Exception as e:
-                                    logger.debug(f"Failed to convert walls to dict for cache: {e}")
-                                
-                                # 构建虚拟墙列表
-                                parsed_count = 0
-                                for idx, wall in enumerate(walls):
+                                if walls and len(walls) > 0:
+                                    logger.info(f"Received {len(walls)} VirtualWall objects from robot {robot_id} at {robot_ip}")
+                                    
+                                    # 更新缓存（转换为字典格式）
                                     try:
-                                        if hasattr(wall, 'start') and hasattr(wall, 'end') and wall.start and wall.end:
-                                            start_dict = wall.start if isinstance(wall.start, dict) else {}
-                                            end_dict = wall.end if isinstance(wall.end, dict) else {}
-                                            
-                                            if start_dict and end_dict and "x" in start_dict and "y" in start_dict and "x" in end_dict and "y" in end_dict:
-                                                virtual_walls.append({
-                                                    "id": wall.id,
-                                                    "start": {
-                                                        "x": float(start_dict.get("x", 0)),
-                                                        "y": float(start_dict.get("y", 0))
-                                                    },
-                                                    "end": {
-                                                        "x": float(end_dict.get("x", 0)),
-                                                        "y": float(end_dict.get("y", 0))
-                                                    }
-                                                })
-                                                parsed_count += 1
+                                        map_manager.virtual_walls = [wall.dict() if hasattr(wall, 'dict') else wall for wall in walls]
                                     except Exception as e:
-                                        logger.debug(f"Error parsing virtual wall {idx}: {e}")
-                                
-                                if parsed_count > 0:
-                                    logger.debug(f"Parsed {parsed_count}/{len(walls)} virtual walls successfully")
-                        except asyncio.TimeoutError:
-                            logger.debug(f"Timeout loading virtual walls from robot {robot_id} (2s), returning empty list to avoid blocking homepage")
-                        except Exception as e:
-                            logger.debug(f"Failed to load virtual walls from robot {robot_id}: {e}")
-                except Exception as e:
-                    logger.debug(f"Error accessing robot {robot_id} for virtual walls: {e}")
+                                        logger.debug(f"Failed to convert walls to dict for cache: {e}")
+                                    
+                                    # 构建虚拟墙列表
+                                    parsed_count = 0
+                                    for idx, wall in enumerate(walls):
+                                        try:
+                                            if hasattr(wall, 'start') and hasattr(wall, 'end') and wall.start and wall.end:
+                                                start_dict = wall.start if isinstance(wall.start, dict) else {}
+                                                end_dict = wall.end if isinstance(wall.end, dict) else {}
+                                                
+                                                if start_dict and end_dict and "x" in start_dict and "y" in start_dict and "x" in end_dict and "y" in end_dict:
+                                                    virtual_walls.append({
+                                                        "id": wall.id,
+                                                        "start": {
+                                                            "x": float(start_dict.get("x", 0)),
+                                                            "y": float(start_dict.get("y", 0))
+                                                        },
+                                                        "end": {
+                                                            "x": float(end_dict.get("x", 0)),
+                                                            "y": float(end_dict.get("y", 0))
+                                                        }
+                                                    })
+                                                    parsed_count += 1
+                                        except Exception as e:
+                                            logger.debug(f"Error parsing virtual wall {idx}: {e}")
+                                    
+                                    if parsed_count > 0:
+                                        logger.info(f"Parsed {parsed_count}/{len(walls)} virtual walls successfully from robot {robot_id}")
+                                        # 成功获取虚拟墙，停止尝试其他机器人
+                                        break
+                            except asyncio.TimeoutError:
+                                logger.debug(f"Timeout loading virtual walls from robot {robot_id} (2s), trying next robot")
+                                continue
+                            except Exception as e:
+                                logger.debug(f"Failed to load virtual walls from robot {robot_id}: {e}, trying next robot")
+                                continue
+                    except Exception as e:
+                        logger.debug(f"Error accessing robot {robot_id} for virtual walls: {e}, trying next robot")
+                        continue
         
         # 确保 virtual_walls 总是存在（即使是空数组）
         if not virtual_walls:
