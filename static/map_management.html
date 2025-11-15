@@ -1,0 +1,499 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>地图管理 - 多机器人调度系统</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #f5f5f5;
+            padding: 2rem;
+        }
+        
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 1.5rem 2rem;
+            border-radius: 8px;
+            margin-bottom: 2rem;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        
+        .header h1 {
+            font-size: 1.8rem;
+            margin-bottom: 0.5rem;
+        }
+        
+        .header p {
+            opacity: 0.9;
+        }
+        
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+        
+        .actions {
+            background: white;
+            padding: 1.5rem;
+            border-radius: 8px;
+            margin-bottom: 2rem;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+        
+        .actions h2 {
+            margin-bottom: 1rem;
+            color: #333;
+        }
+        
+        .form-group {
+            margin-bottom: 1rem;
+        }
+        
+        .form-group label {
+            display: block;
+            margin-bottom: 0.5rem;
+            color: #555;
+            font-weight: 500;
+        }
+        
+        .form-group input,
+        .form-group select,
+        .form-group textarea {
+            width: 100%;
+            padding: 0.75rem;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 1rem;
+        }
+        
+        .form-group textarea {
+            resize: vertical;
+            min-height: 80px;
+        }
+        
+        .btn {
+            padding: 0.75rem 1.5rem;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 1rem;
+            transition: all 0.2s;
+            margin-right: 0.5rem;
+            margin-top: 0.5rem;
+        }
+        
+        .btn-primary {
+            background: #667eea;
+            color: white;
+        }
+        
+        .btn-primary:hover {
+            background: #5568d3;
+        }
+        
+        .btn-danger {
+            background: #e74c3c;
+            color: white;
+        }
+        
+        .btn-danger:hover {
+            background: #c0392b;
+        }
+        
+        .btn-secondary {
+            background: #95a5a6;
+            color: white;
+        }
+        
+        .btn-secondary:hover {
+            background: #7f8c8d;
+        }
+        
+        .maps-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+            gap: 1.5rem;
+        }
+        
+        .map-card {
+            background: white;
+            border-radius: 8px;
+            padding: 1.5rem;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+        
+        .map-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+        }
+        
+        .map-card.default {
+            border: 2px solid #667eea;
+        }
+        
+        .map-thumbnail {
+            width: 100%;
+            height: 200px;
+            background: #f0f0f0;
+            border-radius: 4px;
+            margin-bottom: 1rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+        }
+        
+        .map-thumbnail img {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+        }
+        
+        .map-thumbnail .placeholder {
+            color: #999;
+            font-size: 0.9rem;
+        }
+        
+        .map-info {
+            margin-bottom: 1rem;
+        }
+        
+        .map-name {
+            font-size: 1.2rem;
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 0.5rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        
+        .map-name .default-badge {
+            background: #667eea;
+            color: white;
+            padding: 0.2rem 0.6rem;
+            border-radius: 12px;
+            font-size: 0.75rem;
+            font-weight: normal;
+        }
+        
+        .map-description {
+            color: #666;
+            font-size: 0.9rem;
+            margin-bottom: 0.5rem;
+        }
+        
+        .map-meta {
+            color: #999;
+            font-size: 0.85rem;
+            margin-top: 0.5rem;
+        }
+        
+        .map-actions {
+            display: flex;
+            gap: 0.5rem;
+            flex-wrap: wrap;
+        }
+        
+        .alert {
+            padding: 1rem;
+            border-radius: 4px;
+            margin-bottom: 1rem;
+        }
+        
+        .alert-success {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        
+        .alert-error {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        
+        .loading {
+            text-align: center;
+            padding: 2rem;
+            color: #999;
+        }
+        
+        .empty-state {
+            text-align: center;
+            padding: 3rem;
+            color: #999;
+        }
+        
+        .empty-state h3 {
+            margin-bottom: 0.5rem;
+            color: #666;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🗺️ 地图管理</h1>
+            <p>管理多张地图，设置默认地图用于可视化显示</p>
+        </div>
+        
+        <div id="alertContainer"></div>
+        
+        <div class="actions">
+            <h2>加载新地图</h2>
+            <form id="loadMapForm">
+                <div class="form-group">
+                    <label for="robotSelect">从机器人加载：</label>
+                    <select id="robotSelect" required>
+                        <option value="">请选择机器人...</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="mapName">地图名称：</label>
+                    <input type="text" id="mapName" placeholder="例如：一楼地图" required>
+                </div>
+                <div class="form-group">
+                    <label for="mapDescription">地图描述（可选）：</label>
+                    <textarea id="mapDescription" placeholder="地图描述信息..."></textarea>
+                </div>
+                <button type="submit" class="btn btn-primary">从机器人加载地图</button>
+            </form>
+        </div>
+        
+        <div class="actions">
+            <h2>地图列表</h2>
+            <div id="mapsContainer">
+                <div class="loading">加载中...</div>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        let robots = [];
+        let maps = [];
+        
+        // 加载机器人列表
+        async function loadRobots() {
+            try {
+                const response = await fetch('/api/robots/');
+                if (response.ok) {
+                    robots = await response.json();
+                    const select = document.getElementById('robotSelect');
+                    select.innerHTML = '<option value="">请选择机器人...</option>';
+                    robots.forEach(robot => {
+                        const option = document.createElement('option');
+                        option.value = robot.robot_id;
+                        option.textContent = `${robot.robot_id} (${robot.base_url})`;
+                        select.appendChild(option);
+                    });
+                }
+            } catch (error) {
+                console.error('Failed to load robots:', error);
+                showAlert('加载机器人列表失败', 'error');
+            }
+        }
+        
+        // 加载地图列表
+        async function loadMaps() {
+            try {
+                const response = await fetch('/api/maps/list');
+                if (response.ok) {
+                    const data = await response.json();
+                    maps = data.maps || [];
+                    renderMaps();
+                } else {
+                    throw new Error('Failed to load maps');
+                }
+            } catch (error) {
+                console.error('Failed to load maps:', error);
+                const container = document.getElementById('mapsContainer');
+                container.innerHTML = '<div class="alert alert-error">加载地图列表失败</div>';
+            }
+        }
+        
+        // 渲染地图列表
+        function renderMaps() {
+            const container = document.getElementById('mapsContainer');
+            
+            if (maps.length === 0) {
+                container.innerHTML = `
+                    <div class="empty-state">
+                        <h3>暂无地图</h3>
+                        <p>请从机器人加载第一张地图</p>
+                    </div>
+                `;
+                return;
+            }
+            
+            container.innerHTML = '<div class="maps-grid"></div>';
+            const grid = container.querySelector('.maps-grid');
+            
+            maps.forEach(map => {
+                const card = document.createElement('div');
+                card.className = `map-card ${map.is_default ? 'default' : ''}`;
+                
+                const thumbnail = map.thumbnail_url 
+                    ? `<img src="${map.thumbnail_url}" alt="${map.name}">`
+                    : '<div class="placeholder">暂无缩略图</div>';
+                
+                const defaultBadge = map.is_default 
+                    ? '<span class="default-badge">默认</span>'
+                    : '';
+                
+                const sizeMB = (map.file_size / 1024 / 1024).toFixed(2);
+                const dimensions = map.metadata ? `${map.metadata.width} × ${map.metadata.height}` : '未知';
+                
+                card.innerHTML = `
+                    <div class="map-thumbnail">
+                        ${thumbnail}
+                    </div>
+                    <div class="map-info">
+                        <div class="map-name">
+                            ${map.name}
+                            ${defaultBadge}
+                        </div>
+                        ${map.description ? `<div class="map-description">${map.description}</div>` : ''}
+                        <div class="map-meta">
+                            <div>尺寸: ${dimensions}</div>
+                            <div>大小: ${sizeMB} MB</div>
+                            ${map.robot_id ? `<div>来源: ${map.robot_id}</div>` : ''}
+                            <div>创建时间: ${new Date(map.created_at).toLocaleString('zh-CN')}</div>
+                        </div>
+                    </div>
+                    <div class="map-actions">
+                        ${!map.is_default ? `<button class="btn btn-secondary" onclick="setDefault('${map.map_id}')">设为默认</button>` : ''}
+                        ${maps.length > 1 && !map.is_default ? `<button class="btn btn-danger" onclick="deleteMap('${map.map_id}')">删除</button>` : ''}
+                    </div>
+                `;
+                
+                grid.appendChild(card);
+            });
+        }
+        
+        // 从机器人加载地图
+        document.getElementById('loadMapForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const robotId = document.getElementById('robotSelect').value;
+            const name = document.getElementById('mapName').value;
+            const description = document.getElementById('mapDescription').value;
+            
+            if (!robotId || !name) {
+                showAlert('请填写完整信息', 'error');
+                return;
+            }
+            
+            try {
+                const response = await fetch('/api/maps/load-from-robot', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        robot_id: robotId,
+                        name: name,
+                        description: description || null
+                    })
+                });
+                
+                if (response.ok) {
+                    const data = await response.json();
+                    showAlert(`地图 "${name}" 加载成功！`, 'success');
+                    document.getElementById('loadMapForm').reset();
+                    // 等待一下让缩略图生成
+                    setTimeout(() => {
+                        loadMaps();
+                    }, 2000);
+                } else {
+                    const error = await response.json();
+                    showAlert(`加载失败: ${error.detail || '未知错误'}`, 'error');
+                }
+            } catch (error) {
+                console.error('Failed to load map:', error);
+                showAlert('加载地图失败', 'error');
+            }
+        });
+        
+        // 设置默认地图
+        async function setDefault(mapId) {
+            if (!confirm('确定要将此地图设为默认地图吗？')) {
+                return;
+            }
+            
+            try {
+                const response = await fetch(`/api/maps/${mapId}/set-default`, {
+                    method: 'PUT'
+                });
+                
+                if (response.ok) {
+                    showAlert('默认地图设置成功', 'success');
+                    loadMaps();
+                } else {
+                    const error = await response.json();
+                    showAlert(`设置失败: ${error.detail || '未知错误'}`, 'error');
+                }
+            } catch (error) {
+                console.error('Failed to set default map:', error);
+                showAlert('设置默认地图失败', 'error');
+            }
+        }
+        
+        // 删除地图
+        async function deleteMap(mapId) {
+            const map = maps.find(m => m.map_id === mapId);
+            if (!map) return;
+            
+            if (!confirm(`确定要删除地图 "${map.name}" 吗？此操作不可恢复。`)) {
+                return;
+            }
+            
+            try {
+                const response = await fetch(`/api/maps/${mapId}`, {
+                    method: 'DELETE'
+                });
+                
+                if (response.ok) {
+                    showAlert('地图删除成功', 'success');
+                    loadMaps();
+                } else {
+                    const error = await response.json();
+                    showAlert(`删除失败: ${error.detail || '未知错误'}`, 'error');
+                }
+            } catch (error) {
+                console.error('Failed to delete map:', error);
+                showAlert('删除地图失败', 'error');
+            }
+        }
+        
+        // 显示提示信息
+        function showAlert(message, type = 'success') {
+            const container = document.getElementById('alertContainer');
+            const alert = document.createElement('div');
+            alert.className = `alert alert-${type}`;
+            alert.textContent = message;
+            container.appendChild(alert);
+            
+            setTimeout(() => {
+                alert.remove();
+            }, 3000);
+        }
+        
+        // 初始化
+        window.onload = () => {
+            loadRobots();
+            loadMaps();
+        };
+    </script>
+</body>
+</html>
+

@@ -1,0 +1,1475 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>创建多动作任务 - 多机器人调度系统</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #f5f5f5;
+            padding: 2rem;
+        }
+        
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            padding: 2rem;
+        }
+        
+        h1 {
+            color: #333;
+            margin-bottom: 1.5rem;
+            font-size: 1.8rem;
+        }
+        
+        .step-indicator {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 2rem;
+            padding: 1rem;
+            background: #f8f9fa;
+            border-radius: 8px;
+        }
+        
+        .step {
+            flex: 1;
+            text-align: center;
+            padding: 0.5rem;
+            position: relative;
+        }
+        
+        .step::after {
+            content: '';
+            position: absolute;
+            top: 50%;
+            right: -50%;
+            width: 100%;
+            height: 2px;
+            background: #ddd;
+            z-index: 0;
+        }
+        
+        .step:last-child::after {
+            display: none;
+        }
+        
+        .step.active::after {
+            background: #667eea;
+        }
+        
+        .step-number {
+            display: inline-block;
+            width: 32px;
+            height: 32px;
+            line-height: 32px;
+            border-radius: 50%;
+            background: #ddd;
+            color: white;
+            font-weight: bold;
+            margin-bottom: 0.5rem;
+            position: relative;
+            z-index: 1;
+        }
+        
+        .step.active .step-number {
+            background: #667eea;
+        }
+        
+        .step.completed .step-number {
+            background: #28a745;
+        }
+        
+        .step-label {
+            font-size: 0.85rem;
+            color: #666;
+        }
+        
+        .step.active .step-label {
+            color: #667eea;
+            font-weight: 600;
+        }
+        
+        .form-section {
+            margin-bottom: 2rem;
+            padding: 1.5rem;
+            background: #f8f9fa;
+            border-radius: 8px;
+        }
+        
+        .form-section h2 {
+            font-size: 1.2rem;
+            margin-bottom: 1rem;
+            color: #333;
+        }
+        
+        .form-group {
+            margin-bottom: 1rem;
+        }
+        
+        .form-group label {
+            display: block;
+            margin-bottom: 0.5rem;
+            font-weight: 500;
+            color: #333;
+        }
+        
+        .form-group input,
+        .form-group select {
+            width: 100%;
+            padding: 0.75rem;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 0.9rem;
+        }
+        
+        .form-group input:focus,
+        .form-group select:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+        }
+        
+        .actions-list {
+            margin-top: 1rem;
+        }
+        
+        .action-item {
+            background: white;
+            padding: 1rem;
+            border-radius: 6px;
+            margin-bottom: 1rem;
+            border: 2px solid #e0e0e0;
+            position: relative;
+        }
+        
+        .action-item.active {
+            border-color: #667eea;
+        }
+        
+        .action-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1rem;
+        }
+        
+        .action-title {
+            font-weight: 600;
+            color: #333;
+        }
+        
+        .action-remove {
+            background: #dc3545;
+            color: white;
+            border: none;
+            padding: 0.25rem 0.75rem;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.85rem;
+        }
+        
+        .action-remove:hover {
+            background: #c82333;
+        }
+        
+        .action-fields {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1rem;
+        }
+        
+        .btn {
+            padding: 0.75rem 1.5rem;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.9rem;
+            font-weight: 500;
+            transition: all 0.2s;
+        }
+        
+        .btn-primary {
+            background: #667eea;
+            color: white;
+        }
+        
+        .btn-primary:hover {
+            background: #5568d3;
+        }
+        
+        .btn-secondary {
+            background: #6c757d;
+            color: white;
+        }
+        
+        .btn-secondary:hover {
+            background: #5a6268;
+        }
+        
+        .btn-success {
+            background: #28a745;
+            color: white;
+        }
+        
+        .btn-success:hover {
+            background: #218838;
+        }
+        
+        .btn-danger {
+            background: #dc3545;
+            color: white;
+        }
+        
+        .btn-danger:hover {
+            background: #c82333;
+        }
+        
+        .btn-group {
+            display: flex;
+            gap: 1rem;
+            margin-top: 2rem;
+        }
+        
+        .poi-selector-wrapper {
+            margin-top: 0.5rem;
+        }
+        
+        .poi-search {
+            width: 100%;
+            padding: 0.5rem;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 0.9rem;
+            margin-bottom: 0.5rem;
+        }
+        
+        .poi-search:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 0 2px rgba(102, 126, 234, 0.1);
+        }
+        
+        .poi-selector {
+            max-height: 200px;
+            overflow-y: auto;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            background: white;
+        }
+        
+        .poi-selector.empty {
+            padding: 1rem;
+            text-align: center;
+            color: #999;
+            font-size: 0.9rem;
+        }
+        
+        .poi-option {
+            padding: 0.75rem;
+            cursor: pointer;
+            border-bottom: 1px solid #f0f0f0;
+            transition: background 0.2s;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .poi-option:last-child {
+            border-bottom: none;
+        }
+        
+        .poi-option:hover {
+            background: #f8f9fa;
+        }
+        
+        .poi-option.selected {
+            background: #667eea;
+            color: white;
+        }
+        
+        .poi-option.selected:hover {
+            background: #5568d3;
+        }
+        
+        .poi-name {
+            font-weight: 500;
+            flex: 1;
+        }
+        
+        .poi-coords {
+            font-size: 0.85rem;
+            opacity: 0.7;
+            margin-left: 0.5rem;
+            font-family: 'Courier New', monospace;
+        }
+        
+        .poi-option.selected .poi-coords {
+            opacity: 0.9;
+        }
+        
+        .poi-count {
+            font-size: 0.85rem;
+            color: #666;
+            margin-top: 0.25rem;
+        }
+        
+        .alert {
+            padding: 1rem;
+            border-radius: 4px;
+            margin-bottom: 1rem;
+        }
+        
+        .alert-success {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        
+        .alert-error {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        
+        .alert-info {
+            background: #d1ecf1;
+            color: #0c5460;
+            border: 1px solid #bee5eb;
+        }
+        
+        .hidden {
+            display: none;
+        }
+        
+        .action-preview {
+            margin-top: 1rem;
+            padding: 1rem;
+            background: white;
+            border-radius: 6px;
+            border: 1px solid #e0e0e0;
+        }
+        
+        .action-preview h3 {
+            font-size: 1rem;
+            margin-bottom: 0.5rem;
+            color: #333;
+        }
+        
+        .action-preview-item {
+            padding: 0.5rem;
+            border-bottom: 1px solid #f0f0f0;
+        }
+        
+        .action-preview-item:last-child {
+            border-bottom: none;
+        }
+        
+        .action-type-badge {
+            display: inline-block;
+            padding: 0.25rem 0.5rem;
+            border-radius: 3px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            margin-right: 0.5rem;
+        }
+        
+        .action-type-badge.move_to {
+            background: #17a2b8;
+            color: white;
+        }
+        
+        .action-type-badge.wait {
+            background: #ffc107;
+            color: #333;
+        }
+        
+        .action-type-badge.go_home {
+            background: #28a745;
+            color: white;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🤖 创建多动作任务</h1>
+        
+        <div class="step-indicator">
+            <div class="step active" id="step1">
+                <div class="step-number">1</div>
+                <div class="step-label">配置动作</div>
+            </div>
+            <div class="step" id="step2">
+                <div class="step-number">2</div>
+                <div class="step-label">设置优先级</div>
+            </div>
+            <div class="step" id="step3">
+                <div class="step-number">3</div>
+                <div class="step-label">预览并提交</div>
+            </div>
+        </div>
+        
+        <div id="alertContainer"></div>
+        
+        <!-- 步骤1: 配置动作 -->
+        <div id="step1Content" class="form-section">
+            <h2>步骤 1: 配置动作序列</h2>
+            <p style="color: #666; margin-bottom: 1rem;">
+                添加一系列动作，机器人将按顺序执行这些动作。支持的动作类型：
+            </p>
+            <ul style="color: #666; margin-bottom: 1.5rem; padding-left: 1.5rem;">
+                <li><strong>移动到目标点</strong>：机器人移动到指定坐标或POI点</li>
+                <li><strong>等待</strong>：机器人在当前位置等待指定时间（秒）</li>
+                <li><strong>回桩</strong>：机器人返回充电桩</li>
+            </ul>
+            
+            <div id="actionsList" class="actions-list"></div>
+            
+            <div style="display: flex; gap: 1rem; margin-top: 1rem;">
+                <button class="btn btn-primary" onclick="addAction('move_to')">+ 添加移动动作</button>
+                <button class="btn btn-secondary" onclick="addAction('wait')">+ 添加等待动作</button>
+                <button class="btn btn-success" onclick="addAction('go_home')">+ 添加回桩动作</button>
+            </div>
+            
+            <div class="btn-group">
+                <button class="btn btn-primary" onclick="validateAndGoToStep2()">下一步：设置优先级</button>
+            </div>
+        </div>
+        
+        <!-- 步骤2: 设置优先级 -->
+        <div id="step2Content" class="form-section hidden">
+            <h2>步骤 2: 设置任务优先级</h2>
+            
+            <div class="form-group">
+                <label>优先级（可选，留空将自动计算）</label>
+                <select id="priority">
+                    <option value="" selected>自动计算</option>
+                    <option value="1">低</option>
+                    <option value="2">普通</option>
+                    <option value="3">高</option>
+                    <option value="4">紧急</option>
+                </select>
+            </div>
+            
+            <div class="btn-group">
+                <button class="btn btn-secondary" onclick="goToStep(1)">上一步</button>
+                <button class="btn btn-primary" onclick="validateAndGoToStep3()">下一步：预览并提交</button>
+            </div>
+        </div>
+        
+        <!-- 步骤3: 预览并提交 -->
+        <div id="step3Content" class="form-section hidden">
+            <h2>步骤 3: 预览并提交</h2>
+            
+            <div class="action-preview">
+                <h3>任务预览</h3>
+                <div id="previewContent"></div>
+            </div>
+            
+            <div class="btn-group">
+                <button class="btn btn-secondary" onclick="goToStep(2)">上一步</button>
+                <button class="btn btn-success" onclick="submitTask()">提交任务</button>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        const API_BASE = window.location.origin;
+        let actions = [];
+        let pois = [];
+        
+        // 初始化
+        window.onload = function() {
+            loadPois();
+        };
+        
+        let poiLoadingRetries = 0;
+        const MAX_POI_RETRIES = 3;
+        
+        async function loadPois(retryCount = 0) {
+            try {
+                // 使用专门的POI端点，更快更轻量
+                const response = await fetch(`${API_BASE}/api/maps/pois`, {
+                    signal: AbortSignal.timeout(5000) // 5秒超时
+                });
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                const loadedPois = await response.json();
+                if (Array.isArray(loadedPois)) {
+                    pois = loadedPois;
+                    poiLoadingRetries = 0; // 重置重试计数
+                    console.log(`Loaded ${pois.length} POIs`);
+                    // 如果已经有动作且正在显示，重新渲染以更新POI选择器
+                    if (actions.length > 0) {
+                        renderActions();
+                    }
+                } else {
+                    throw new Error('Invalid POI data format');
+                }
+            } catch (error) {
+                console.error(`Failed to load POIs (attempt ${retryCount + 1}/${MAX_POI_RETRIES}):`, error);
+                
+                // 如果还有重试次数，延迟后重试
+                if (retryCount < MAX_POI_RETRIES - 1) {
+                    setTimeout(() => {
+                        loadPois(retryCount + 1);
+                    }, 2000 * (retryCount + 1)); // 递增延迟：2秒、4秒、6秒
+                } else {
+                    pois = [];
+                    // 显示错误提示
+                    showAlert('加载POI列表失败，请稍后重试。如果问题持续，请刷新页面。', 'error');
+                }
+            }
+        }
+        
+        function addAction(type) {
+            const action = {
+                id: Date.now(),
+                action_type: type,
+                target_pose: type === 'move_to' ? { x: 0, y: 0, yaw: 0 } : null,
+                poi_name: type === 'move_to' ? (pois.length > 0 ? pois[0].id : null) : null, // 默认使用第一个POI
+                wait_duration: type === 'wait' ? 5 : null,
+                acceptable_precision: 0.3,
+                speed_ratio: 1.0
+            };
+            actions.push(action);
+            renderActions();
+        }
+        
+        function removeAction(id) {
+            actions = actions.filter(a => a.id !== id);
+            renderActions();
+        }
+        
+        function renderActions() {
+            const container = document.getElementById('actionsList');
+            if (actions.length === 0) {
+                container.innerHTML = '<p style="color: #666; text-align: center; padding: 2rem;">暂无动作，请添加动作</p>';
+                return;
+            }
+            
+            container.innerHTML = actions.map((action, index) => {
+                let fields = '';
+                
+                if (action.action_type === 'move_to') {
+                    fields = `
+                        <div class="form-group">
+                            <label>导航方式</label>
+                            <select id="navType_${action.id}" onchange="updateAction(${action.id}, 'navigation_type', this.value)">
+                                <option value="coordinate" ${!action.poi_name ? 'selected' : ''}>坐标导航</option>
+                                <option value="poi" ${action.poi_name ? 'selected' : ''}>POI导航</option>
+                            </select>
+                        </div>
+                        <div id="moveToFields_${action.id}" style="display: ${action.poi_name ? 'none' : 'block'};">
+                            <div class="form-group">
+                                <label>目标X坐标</label>
+                                <input type="number" step="0.1" value="${action.target_pose.x}" 
+                                       onchange="updateAction(${action.id}, 'target_x', parseFloat(this.value))">
+                            </div>
+                            <div class="form-group">
+                                <label>目标Y坐标</label>
+                                <input type="number" step="0.1" value="${action.target_pose.y}" 
+                                       onchange="updateAction(${action.id}, 'target_y', parseFloat(this.value))">
+                            </div>
+                            <div class="form-group">
+                                <label>目标角度</label>
+                                <input type="number" step="0.1" value="${action.target_pose.yaw}" 
+                                       onchange="updateAction(${action.id}, 'target_yaw', parseFloat(this.value))">
+                            </div>
+                        </div>
+                        <div id="poiFields_${action.id}" style="display: ${action.poi_name ? 'block' : 'none'};">
+                            <div class="form-group">
+                                <label>选择POI点</label>
+                                <div class="poi-selector-wrapper">
+                                    <input type="text" class="poi-search" id="poiSearch_${action.id}" 
+                                           placeholder="搜索POI点..." 
+                                           oninput="filterPoisForAction(${action.id})">
+                                    <div class="poi-selector" id="poiSelector_${action.id}">
+                                        ${pois.length > 0 ? pois.map(poi => `
+                                            <div class="poi-option ${action.poi_name === poi.id ? 'selected' : ''}" 
+                                                 onclick="selectPoi(${action.id}, '${poi.id}')"
+                                                 data-poi-id="${poi.id}">
+                                                <span class="poi-name">${poi.display_name || poi.id}</span>
+                                                <span class="poi-coords">(${poi.pose.x.toFixed(2)}, ${poi.pose.y.toFixed(2)})</span>
+                                            </div>
+                                        `).join('') : '<div class="poi-selector empty">暂无POI点，请先在地图上创建POI点</div>'}
+                                    </div>
+                                    <div class="poi-count" id="poiCount_${action.id}">${pois.length > 0 ? `共 ${pois.length} 个POI点` : ''}</div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label>到达精度（米）</label>
+                            <input type="number" step="0.1" min="0.1" value="${action.acceptable_precision}" 
+                                   onchange="updateAction(${action.id}, 'acceptable_precision', parseFloat(this.value))">
+                        </div>
+                        <div class="form-group">
+                            <label>速度比例</label>
+                            <input type="number" step="0.1" min="0.1" max="1.0" value="${action.speed_ratio}" 
+                                   onchange="updateAction(${action.id}, 'speed_ratio', parseFloat(this.value))">
+                        </div>
+                    `;
+                } else if (action.action_type === 'wait') {
+                    fields = `
+                        <div class="form-group">
+                            <label>等待时长（秒）</label>
+                            <input type="number" step="0.1" min="0.1" value="${action.wait_duration}" 
+                                   onchange="updateAction(${action.id}, 'wait_duration', parseFloat(this.value))">
+                        </div>
+                    `;
+                } else if (action.action_type === 'go_home') {
+                    fields = '<p style="color: #666;">机器人将返回充电桩</p>';
+                }
+                
+                return `
+                    <div class="action-item">
+                        <div class="action-header">
+                            <div class="action-title">动作 ${index + 1}: ${getActionTypeName(action.action_type)}</div>
+                            <button class="action-remove" onclick="removeAction(${action.id})">删除</button>
+                        </div>
+                        <div class="action-fields">
+                            ${fields}
+                        </div>
+                    </div>
+                `;
+            }).join('');
+            
+            // 更新导航方式切换（使用setTimeout确保DOM已渲染）
+            setTimeout(() => {
+                actions.forEach(action => {
+                    if (action.action_type === 'move_to') {
+                        const select = document.getElementById(`navType_${action.id}`);
+                        if (select) {
+                            select.value = action.poi_name ? 'poi' : 'coordinate';
+                            updateNavigationFields(action.id, select.value);
+                        }
+                    }
+                });
+            }, 0);
+        }
+        
+        function getActionTypeName(type) {
+            const names = {
+                'move_to': '移动到目标点',
+                'wait': '等待',
+                'go_home': '回桩'
+            };
+            return names[type] || type;
+        }
+        
+        function updateAction(id, field, value) {
+            const action = actions.find(a => a.id === id);
+            if (!action) return;
+            
+            if (field === 'target_x') {
+                action.target_pose.x = value;
+                // 清除坐标相关的错误提示
+                clearCoordinateErrors();
+            } else if (field === 'target_y') {
+                action.target_pose.y = value;
+                clearCoordinateErrors();
+            } else if (field === 'target_yaw') {
+                action.target_pose.yaw = value;
+            } else if (field === 'wait_duration') {
+                action.wait_duration = value;
+            } else if (field === 'acceptable_precision') {
+                action.acceptable_precision = value;
+            } else if (field === 'speed_ratio') {
+                action.speed_ratio = value;
+            } else if (field === 'navigation_type') {
+                updateNavigationFields(id, value);
+            }
+        }
+        
+        function clearCoordinateErrors() {
+            const alertContainer = document.getElementById('alertContainer');
+            const errorAlerts = alertContainer.querySelectorAll('.alert-error');
+            errorAlerts.forEach(alert => {
+                if (alert.textContent.includes('请设置目标坐标')) {
+                    alert.remove();
+                }
+            });
+        }
+        
+        function updateNavigationFields(id, type) {
+            const action = actions.find(a => a.id === id);
+            if (!action) return;
+            
+            const moveToFields = document.getElementById(`moveToFields_${id}`);
+            const poiFields = document.getElementById(`poiFields_${id}`);
+            
+            if (!moveToFields || !poiFields) {
+                // DOM元素可能还没有渲染，稍后重试
+                setTimeout(() => updateNavigationFields(id, type), 100);
+                return;
+            }
+            
+            if (type === 'poi') {
+                moveToFields.style.display = 'none';
+                poiFields.style.display = 'block';
+                
+                // 如果POI列表为空，尝试重新加载
+                if (pois.length === 0) {
+                    console.warn('POI list is empty, attempting to reload...');
+                    showAlert('POI列表正在加载，请稍候...', 'info');
+                    loadPois();
+                    // 等待POI加载完成后再自动选择
+                    setTimeout(() => {
+                        if (pois.length > 0 && (!action.poi_name || action.poi_name.trim() === '')) {
+                            action.poi_name = pois[0].id;
+                            updatePoiSelector(id);
+                        }
+                    }, 3000);
+                } else {
+                    // 如果还没有选择POI且POI列表不为空，自动选择第一个
+                    if (!action.poi_name || action.poi_name.trim() === '') {
+                        action.poi_name = pois[0].id;
+                        // 更新POI选择器的显示
+                        updatePoiSelector(id);
+                    }
+                }
+            } else {
+                moveToFields.style.display = 'grid';
+                poiFields.style.display = 'none';
+                action.poi_name = null; // 切换到坐标导航时清除POI
+            }
+        }
+        
+        function updatePoiSelector(actionId) {
+            filterPoisForAction(actionId);
+        }
+        
+        function filterPoisForAction(actionId) {
+            const selector = document.getElementById(`poiSelector_${actionId}`);
+            const searchInput = document.getElementById(`poiSearch_${actionId}`);
+            const countElement = document.getElementById(`poiCount_${actionId}`);
+            
+            if (!selector) return;
+            
+            const action = actions.find(a => a.id === actionId);
+            if (!action) return;
+            
+            if (pois.length === 0) {
+                selector.innerHTML = '<div class="poi-selector empty">暂无POI点，请先在地图上创建POI点</div>';
+                if (countElement) countElement.textContent = '';
+                return;
+            }
+            
+            const searchTerm = (searchInput?.value || '').toLowerCase().trim();
+            
+            // 过滤POI
+            let filteredPois = pois;
+            if (searchTerm) {
+                filteredPois = pois.filter(poi => {
+                    const displayName = (poi.display_name || poi.id).toLowerCase();
+                    const poiId = poi.id.toLowerCase();
+                    return displayName.includes(searchTerm) || poiId.includes(searchTerm);
+                });
+            }
+            
+            // 按名称排序
+            filteredPois.sort((a, b) => {
+                const nameA = (a.display_name || a.id).toLowerCase();
+                const nameB = (b.display_name || b.id).toLowerCase();
+                return nameA.localeCompare(nameB);
+            });
+            
+            // 更新计数
+            if (countElement) {
+                if (searchTerm) {
+                    countElement.textContent = `显示 ${filteredPois.length} / ${pois.length} 个POI点`;
+                } else {
+                    countElement.textContent = `共 ${pois.length} 个POI点`;
+                }
+            }
+            
+            // 渲染POI列表
+            if (filteredPois.length === 0) {
+                selector.innerHTML = '<div class="poi-selector empty">未找到匹配的POI点</div>';
+                return;
+            }
+            
+            selector.innerHTML = filteredPois.map(poi => {
+                const isSelected = action.poi_name === poi.id;
+                return `
+                    <div class="poi-option ${isSelected ? 'selected' : ''}" 
+                         onclick="selectPoi(${actionId}, '${poi.id}')"
+                         data-poi-id="${poi.id}">
+                        <span class="poi-name">${poi.display_name || poi.id}</span>
+                        <span class="poi-coords">(${poi.pose.x.toFixed(2)}, ${poi.pose.y.toFixed(2)})</span>
+                    </div>
+                `;
+            }).join('');
+        }
+        
+        function selectPoi(actionId, poiId) {
+            const action = actions.find(a => a.id === actionId);
+            if (action && poiId) {
+                action.poi_name = poiId.trim();
+                // 更新POI选择器显示（高亮选中的POI）
+                updatePoiSelector(actionId);
+                console.log(`Selected POI for action ${actionId}: ${poiId}`);
+                
+                // 清除之前的错误提示（如果POI已选择）
+                const alertContainer = document.getElementById('alertContainer');
+                const errorAlerts = alertContainer.querySelectorAll('.alert-error');
+                errorAlerts.forEach(alert => {
+                    if (alert.textContent.includes('请选择一个POI点') || alert.textContent.includes('POI列表未加载')) {
+                        alert.remove();
+                    }
+                });
+            }
+        }
+        
+        function validateAndGoToStep2() {
+            try {
+                console.log('validateAndGoToStep2 called, actions count:', actions.length);
+                
+                // 验证步骤1的配置
+                if (actions.length === 0) {
+                    showAlert('请至少添加一个动作', 'error');
+                    return false;
+                }
+                
+                // 验证所有move_to动作是否配置完整
+                for (let i = 0; i < actions.length; i++) {
+                    const action = actions[i];
+                    if (action.action_type === 'move_to') {
+                        // 检查当前选择的导航方式（从DOM获取，更准确）
+                        const navSelect = document.getElementById(`navType_${action.id}`);
+                        let navigationType = 'coordinate'; // 默认值
+                        
+                        if (navSelect) {
+                            navigationType = navSelect.value;
+                        } else {
+                            // 如果找不到选择器，根据poi_name判断
+                            navigationType = (action.poi_name !== null && action.poi_name !== undefined) ? 'poi' : 'coordinate';
+                        }
+                        
+                        console.log(`Action ${i + 1}: navigationType=${navigationType}, poi_name=${action.poi_name}, target_pose=`, action.target_pose);
+                        
+                        const hasPoiName = action.poi_name && typeof action.poi_name === 'string' && action.poi_name.trim() !== '';
+                        const hasTargetPose = action.target_pose && 
+                                            (action.target_pose.x !== 0 || action.target_pose.y !== 0);
+                        
+                        // 如果两种方式都没有配置，根据导航方式提示
+                        if (!hasPoiName && !hasTargetPose) {
+                            if (navigationType === 'poi') {
+                                if (pois.length === 0) {
+                                    showAlert(`动作 ${i + 1}: POI列表未加载，请等待POI加载完成或刷新页面`, 'error');
+                                    loadPois();
+                                    return false; // POI未加载，阻止进入下一步
+                                } else {
+                                    showAlert(`动作 ${i + 1}: 请选择一个POI点`, 'error');
+                                    return false; // 未选择POI，阻止进入下一步
+                                }
+                            } else {
+                                // 坐标导航：如果坐标是(0,0)，提示但不强制阻止（允许用户稍后修改）
+                                if (action.target_pose && action.target_pose.x === 0 && action.target_pose.y === 0) {
+                                    showAlert(`动作 ${i + 1}: 目标坐标为(0,0)，请确认是否正确`, 'error');
+                                    return false; // 坐标无效，阻止进入下一步
+                                } else {
+                                    showAlert(`动作 ${i + 1}: 请设置目标坐标`, 'error');
+                                    return false;
+                                }
+                            }
+                        }
+                        
+                        // 如果选择了POI导航但POI名称无效
+                        if (navigationType === 'poi' && !hasPoiName) {
+                            if (pois.length === 0) {
+                                showAlert(`动作 ${i + 1}: POI列表未加载，请等待POI加载完成或刷新页面`, 'error');
+                                loadPois();
+                                return false;
+                            } else {
+                                showAlert(`动作 ${i + 1}: 请选择一个POI点`, 'error');
+                                return false;
+                            }
+                        }
+                        
+                        // 如果选择了坐标导航但坐标无效
+                        if (navigationType === 'coordinate' && !hasTargetPose) {
+                            showAlert(`动作 ${i + 1}: 请设置目标坐标（当前为0,0）`, 'error');
+                            return false;
+                        }
+                    }
+                }
+                
+                console.log('Validation passed, going to step 2');
+                // 验证通过，进入下一步
+                goToStep(2);
+                return true;
+            } catch (error) {
+                console.error('Error in validateAndGoToStep2:', error);
+                showAlert('验证时发生错误: ' + error.message, 'error');
+                return false;
+            }
+        }
+        
+        function validateAndGoToStep3() {
+            // 验证步骤2的配置
+            if (actions.length === 0) {
+                showAlert('请至少添加一个动作', 'error');
+                return;
+            }
+            
+            // 再次验证所有move_to动作
+            for (let i = 0; i < actions.length; i++) {
+                const action = actions[i];
+                if (action.action_type === 'move_to') {
+                    const navSelect = document.getElementById(`navType_${action.id}`);
+                    const navigationType = navSelect ? navSelect.value : (action.poi_name !== null ? 'poi' : 'coordinate');
+                    
+                    const hasPoiName = action.poi_name && typeof action.poi_name === 'string' && action.poi_name.trim() !== '';
+                    const hasTargetPose = action.target_pose && 
+                                        (action.target_pose.x !== 0 || action.target_pose.y !== 0);
+                    
+                    if (!hasPoiName && !hasTargetPose) {
+                        if (navigationType === 'poi') {
+                            showAlert(`动作 ${i + 1}: 请选择一个POI点`, 'error');
+                        } else {
+                            showAlert(`动作 ${i + 1}: 请设置目标坐标（当前为0,0）`, 'error');
+                        }
+                        return; // 验证失败，不进入下一步
+                    }
+                }
+            }
+            
+            // 验证通过，进入下一步
+            goToStep(3);
+        }
+        
+        function goToStep(step) {
+            try {
+                console.log('goToStep called with step:', step);
+                
+                // 更新步骤指示器
+                for (let i = 1; i <= 3; i++) {
+                    const stepEl = document.getElementById(`step${i}`);
+                    const contentEl = document.getElementById(`step${i}Content`);
+                    
+                    if (!stepEl || !contentEl) {
+                        console.error(`Step ${i} elements not found`);
+                        continue;
+                    }
+                    
+                    if (i < step) {
+                        stepEl.classList.add('completed');
+                        stepEl.classList.remove('active');
+                    } else if (i === step) {
+                        stepEl.classList.add('active');
+                        stepEl.classList.remove('completed');
+                    } else {
+                        stepEl.classList.remove('active', 'completed');
+                    }
+                    
+                    if (i === step) {
+                        contentEl.classList.remove('hidden');
+                    } else {
+                        contentEl.classList.add('hidden');
+                    }
+                }
+                
+                // 如果是步骤3，生成预览
+                if (step === 3) {
+                    renderPreview();
+                }
+                
+                console.log('goToStep completed successfully');
+            } catch (error) {
+                console.error('Error in goToStep:', error);
+                showAlert('切换步骤时发生错误: ' + error.message, 'error');
+            }
+        }
+        
+        function renderPreview() {
+            const container = document.getElementById('previewContent');
+            container.innerHTML = actions.map((action, index) => {
+                let details = '';
+                
+                if (action.action_type === 'move_to') {
+                    const hasPoiName = action.poi_name && typeof action.poi_name === 'string' && action.poi_name.trim() !== '';
+                    if (hasPoiName) {
+                        // 注意：从 /api/maps/pois 返回的POI数据结构中，display_name是直接字段
+                        const poi = pois.find(p => p.id === action.poi_name || p.display_name === action.poi_name);
+                        details = `POI: ${poi ? (poi.display_name || poi.id) : action.poi_name}`;
+                    } else if (action.target_pose) {
+                        details = `坐标: (${action.target_pose.x.toFixed(2)}, ${action.target_pose.y.toFixed(2)}, yaw=${action.target_pose.yaw.toFixed(2)})`;
+                    } else {
+                        details = `未配置目标位置`;
+                    }
+                    details += ` | 精度: ${action.acceptable_precision}m | 速度: ${action.speed_ratio}`;
+                } else if (action.action_type === 'wait') {
+                    details = `等待时长: ${action.wait_duration}秒`;
+                } else if (action.action_type === 'go_home') {
+                    details = '返回充电桩';
+                }
+                
+                return `
+                    <div class="action-preview-item">
+                        <span class="action-type-badge ${action.action_type}">${getActionTypeName(action.action_type)}</span>
+                        ${details}
+                    </div>
+                `;
+            }).join('');
+        }
+        
+        let isSubmitting = false; // 防止重复提交
+        
+        async function submitTask() {
+            // 防止重复提交
+            if (isSubmitting) {
+                showAlert('任务正在提交中，请稍候...', 'error');
+                return;
+            }
+            
+            if (actions.length === 0) {
+                showAlert('请至少添加一个动作', 'error');
+                return;
+            }
+            
+            // 禁用提交按钮
+            const submitButton = document.querySelector('button[onclick="submitTask()"]');
+            const originalText = submitButton?.textContent || '提交任务';
+            if (submitButton) {
+                submitButton.disabled = true;
+                submitButton.textContent = '提交中...';
+            }
+            
+            isSubmitting = true;
+            
+            // 构建请求数据
+            console.log('Building request data, actions:', actions);
+            const requestData = {
+                actions: actions.map((action, index) => {
+                    const actionData = {
+                        action_type: action.action_type
+                    };
+                    
+                    if (action.action_type === 'move_to') {
+                        // 检查是否使用POI导航（poi_name必须是非空字符串）
+                        const hasPoiName = action.poi_name && typeof action.poi_name === 'string' && action.poi_name.trim() !== '';
+                        
+                        // 检查是否使用坐标导航（target_pose必须存在且坐标不为0,0）
+                        const hasTargetPose = action.target_pose && 
+                                            (action.target_pose.x !== 0 || action.target_pose.y !== 0);
+                        
+                        if (hasPoiName) {
+                            actionData.poi_name = action.poi_name.trim();
+                            // 尝试从pois数组中找到对应的POI，获取display_name
+                            // 注意：从 /api/maps/pois 返回的POI数据结构中，display_name是直接字段，不是metadata.display_name
+                            const selectedPoi = pois.find(p => p.id === action.poi_name || p.display_name === action.poi_name);
+                            if (selectedPoi) {
+                                // 如果找到了POI，使用display_name或id作为poi_display_name
+                                actionData.poi_display_name = selectedPoi.display_name || selectedPoi.id;
+                                console.log(`Found POI: id=${selectedPoi.id}, display_name=${selectedPoi.display_name}, using as poi_display_name=${actionData.poi_display_name}`);
+                            } else {
+                                // 如果没找到，使用poi_name作为poi_display_name（向后兼容）
+                                actionData.poi_display_name = action.poi_name.trim();
+                                console.warn(`POI not found in pois array for ${action.poi_name}, using poi_name as poi_display_name`);
+                            }
+                            // POI导航时不需要target_pose，但为了确保后端验证通过，显式设置为null
+                            actionData.target_pose = null;
+                        } else if (hasTargetPose) {
+                            // 坐标导航时需要target_pose
+                            actionData.target_pose = {
+                                x: action.target_pose.x,
+                                y: action.target_pose.y,
+                                yaw: action.target_pose.yaw || 0,
+                                z: 0
+                            };
+                        } else {
+                            // 检查当前导航方式
+                            const navigationType = action.poi_name !== null ? 'poi' : 'coordinate';
+                            if (navigationType === 'poi') {
+                                showAlert(`动作 ${index + 1}: 请选择一个POI点`, 'error');
+                            } else {
+                                showAlert(`动作 ${index + 1}: 请设置目标坐标（当前为0,0）`, 'error');
+                            }
+                            throw new Error(`Action ${index}: move_to requires either target_pose or poi_name`);
+                        }
+                        actionData.acceptable_precision = action.acceptable_precision || 0.3;
+                        actionData.speed_ratio = action.speed_ratio || 1.0;
+                    } else if (action.action_type === 'wait') {
+                        if (!action.wait_duration || action.wait_duration <= 0) {
+                            showAlert('等待动作必须指定等待时长（大于0）', 'error');
+                            throw new Error('Invalid wait action');
+                        }
+                        actionData.wait_duration = action.wait_duration;
+                    } else if (action.action_type === 'go_home') {
+                        // 回桩动作不需要额外参数
+                    }
+                    
+                    console.log(`Action ${index} data:`, actionData);
+                    return actionData;
+                })
+            };
+            
+            console.log('Final request data:', JSON.stringify(requestData, null, 2));
+            
+            // 验证动作序列
+            if (requestData.actions.length === 0) {
+                showAlert('请至少添加一个动作', 'error');
+                return;
+            }
+            
+            const priority = document.getElementById('priority').value;
+            if (priority) {
+                requestData.priority = parseInt(priority);
+            }
+            
+            // 保存任务名称用于显示（即使后端不支持，也用于前端显示）
+            const taskNameInput = document.getElementById('task-name');
+            const taskName = taskNameInput ? taskNameInput.value.trim() : `多动作任务-${new Date().toLocaleTimeString()}`;
+            
+            // 立即显示提交中状态
+            showAlert('⏳ 正在提交任务，请稍候...', 'info', 0); // 0表示不自动关闭
+            if (submitButton) {
+                submitButton.textContent = '提交中...';
+                submitButton.disabled = true;
+                submitButton.style.opacity = '0.7';
+            }
+            
+            // 更可靠的思路：使用更长的超时时间，但后端已经优化为快速返回
+            // 如果超时，提示用户任务可能已创建，建议查看任务列表
+            const requestStartTime = Date.now();
+            console.log(`[${new Date().toISOString()}] Starting multi-action task creation request`);
+            try {
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => {
+                    const elapsed = Date.now() - requestStartTime;
+                    console.warn(`[${new Date().toISOString()}] Request timeout after ${elapsed}ms`);
+                    controller.abort();
+                }, 20000); // 增加到20秒超时，给后端更多时间
+                
+                const response = await fetch(`${API_BASE}/api/tasks/multi-action`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(requestData),
+                    signal: controller.signal
+                });
+                
+                clearTimeout(timeoutId);
+                const requestElapsed = Date.now() - requestStartTime;
+                console.log(`[${new Date().toISOString()}] Request completed in ${requestElapsed}ms`);
+                
+                if (response.ok) {
+                    const task = await response.json();
+                    console.log(`[${new Date().toISOString()}] Received task response:`, task);
+                    
+                    // 立即显示任务ID（与首页保持一致，使用alert立即弹出）
+                    const taskId = task.task_id || 'N/A';
+                    const taskNameDisplay = task.name || taskName || '多动作任务';
+                    const robotId = task.robot_id || '未分配';
+                    const taskStatus = task.status || 'pending';
+                    
+                    // 立即弹出alert显示任务ID（与首页单点任务创建保持一致）
+                    alert(`任务创建成功！\n任务ID: ${taskId}`);
+                    
+                    // 同时显示详细提示（在容器中）
+                    let successMessage = `✅ 任务创建成功！\n\n任务ID: ${taskId}\n任务名称: ${taskNameDisplay}\n动作数量: ${requestData.actions.length}\n任务状态: ${taskStatus}`;
+                    if (robotId !== '未分配') {
+                        successMessage += `\n分配机器人: ${robotId}`;
+                    }
+                    successMessage += `\n\n您可以继续创建新任务，或点击下方按钮查看任务列表。`;
+                    
+                    // 显示详细成功提示（不等待，确保用户能看到）
+                    showAlert(successMessage, 'success', 20000);  // 显示20秒，让用户有足够时间阅读
+                    
+                    console.log('Task created successfully:', {
+                        task_id: taskId,
+                        task_name: taskNameDisplay,
+                        robot_id: robotId,
+                        status: taskStatus,
+                        actions_count: requestData.actions.length,
+                        full_task: task
+                    });
+                    
+                    // 恢复按钮状态，并添加操作按钮
+                    if (submitButton) {
+                        submitButton.textContent = '✅ 提交成功';
+                        submitButton.style.background = '#28a745';
+                        submitButton.style.opacity = '1';
+                        submitButton.disabled = true;
+                        
+                        // 清除之前添加的按钮（如果有）
+                        const existingButtons = submitButton.parentElement.querySelectorAll('.btn-created');
+                        existingButtons.forEach(btn => btn.remove());
+                        
+                        // 添加"继续创建任务"按钮
+                        const continueCreateBtn = document.createElement('button');
+                        continueCreateBtn.textContent = '继续创建任务';
+                        continueCreateBtn.className = 'btn btn-primary btn-created';
+                        continueCreateBtn.style.marginLeft = '10px';
+                        continueCreateBtn.onclick = () => {
+                            // 重置表单
+                            actions = [];
+                            renderActions();
+                            goToStep(1);
+                            isSubmitting = false;
+                            // 清除成功提示
+                            document.getElementById('alertContainer').innerHTML = '';
+                            // 恢复提交按钮
+                            submitButton.textContent = '提交任务';
+                            submitButton.style.background = '';
+                            submitButton.style.opacity = '1';
+                            submitButton.disabled = false;
+                            // 移除所有创建的按钮
+                            existingButtons.forEach(btn => btn.remove());
+                            continueCreateBtn.remove();
+                            if (submitButton.nextElementSibling) {
+                                submitButton.nextElementSibling.remove();
+                            }
+                        };
+                        submitButton.parentElement.appendChild(continueCreateBtn);
+                        
+                        // 添加"查看任务列表"按钮
+                        const viewTaskListBtn = document.createElement('button');
+                        viewTaskListBtn.textContent = '查看任务列表';
+                        viewTaskListBtn.className = 'btn btn-secondary btn-created';
+                        viewTaskListBtn.style.marginLeft = '10px';
+                        viewTaskListBtn.onclick = () => {
+                            // 跳转到任务列表页面，并添加时间戳参数，确保页面刷新
+                            window.location.href = `task_list.html?refresh=${Date.now()}`;
+                        };
+                        submitButton.parentElement.appendChild(viewTaskListBtn);
+                    }
+                    
+                    // 重置提交状态
+                    isSubmitting = false;
+                    
+                    // 不再自动跳转，让用户停留在当前页面
+                } else {
+                    let errorMessage = '未知错误';
+                    try {
+                        const error = await response.json();
+                        errorMessage = error.detail || error.message || `HTTP ${response.status}: ${response.statusText}`;
+                    } catch (e) {
+                        // 如果无法解析JSON，使用状态文本
+                        errorMessage = `HTTP ${response.status}: ${response.statusText}`;
+                    }
+                    showAlert('任务创建失败: ' + errorMessage, 'error');
+                    console.error('Task creation failed:', response.status, errorMessage);
+                    
+                    // 恢复按钮状态
+                    if (submitButton) {
+                        submitButton.disabled = false;
+                        submitButton.textContent = originalText;
+                    }
+                    isSubmitting = false;
+                }
+            } catch (error) {
+                const requestElapsed = Date.now() - requestStartTime;
+                console.error(`[${new Date().toISOString()}] Task submission error after ${requestElapsed}ms:`, error);
+                
+                // 如果是超时错误，检查任务是否已创建成功
+                if (error.name === 'AbortError' || error.name === 'TimeoutError') {
+                    console.warn(`[${new Date().toISOString()}] Request aborted/timeout after ${requestElapsed}ms, checking if task was created`);
+                    showAlert('⚠️ 任务提交超时，正在检查任务是否已创建...', 'info', 0);
+                    
+                    // 等待2秒后查询任务列表，检查是否有新创建的任务
+                    setTimeout(async () => {
+                        try {
+                            const checkResponse = await fetch(`${API_BASE}/api/tasks/?page=1&page_size=10&sort_order=desc`);
+                            if (checkResponse.ok) {
+                                const data = await checkResponse.json();
+                                const recentTasks = data.tasks || [];
+                                
+                                // 检查最近3分钟内创建的多动作任务
+                                const now = new Date();
+                                const threeMinutesAgo = new Date(now.getTime() - 180000);
+                                
+                                const recentTask = recentTasks.find(t => {
+                                    if (!t.created_at) return false;
+                                    const created = new Date(t.created_at);
+                                    return created > threeMinutesAgo && t.is_multi_action === true;
+                                });
+                                
+                                if (recentTask) {
+                                    // 找到了新创建的任务，立即显示任务ID（与首页保持一致）
+                                    const taskId = recentTask.task_id || 'N/A';
+                                    const taskNameDisplay = recentTask.name || taskName || '多动作任务';
+                                    const robotId = recentTask.robot_id || '未分配';
+                                    const taskStatus = recentTask.status || 'pending';
+                                    
+                                    // 立即弹出alert显示任务ID（与首页单点任务创建保持一致）
+                                    alert(`任务创建成功！\n任务ID: ${taskId}`);
+                                    
+                                    // 同时显示详细提示（在容器中）
+                                    let successMessage = `✅ 任务已创建成功！\n\n任务ID: ${taskId}\n任务名称: ${taskNameDisplay}\n动作数量: ${recentTask.actions?.length || requestData.actions.length}\n任务状态: ${taskStatus}`;
+                                    if (robotId !== '未分配') {
+                                        successMessage += `\n分配机器人: ${robotId}`;
+                                    }
+                                    successMessage += `\n\n您可以继续创建新任务，或点击下方按钮查看任务列表。`;
+                                    
+                                    showAlert(successMessage, 'success', 20000);
+                                    
+                                    console.log('Task found after timeout:', {
+                                        task_id: taskId,
+                                        task_name: taskNameDisplay,
+                                        robot_id: robotId,
+                                        status: taskStatus,
+                                        actions_count: recentTask.actions?.length || requestData.actions.length
+                                    });
+                                    
+                                    // 恢复按钮状态，并添加操作按钮
+                                    if (submitButton) {
+                                        submitButton.textContent = '✅ 提交成功';
+                                        submitButton.style.background = '#28a745';
+                                        submitButton.style.opacity = '1';
+                                        submitButton.disabled = true;
+                                        
+                                        // 清除之前添加的按钮（如果有）
+                                        const existingButtons = submitButton.parentElement.querySelectorAll('.btn-created');
+                                        existingButtons.forEach(btn => btn.remove());
+                                        
+                                        // 添加"继续创建任务"按钮
+                                        const continueCreateBtn = document.createElement('button');
+                                        continueCreateBtn.textContent = '继续创建任务';
+                                        continueCreateBtn.className = 'btn btn-primary btn-created';
+                                        continueCreateBtn.style.marginLeft = '10px';
+                                        continueCreateBtn.onclick = () => {
+                                            // 重置表单
+                                            actions = [];
+                                            renderActions();
+                                            goToStep(1);
+                                            isSubmitting = false;
+                                            // 清除成功提示
+                                            document.getElementById('alertContainer').innerHTML = '';
+                                            // 恢复提交按钮
+                                            submitButton.textContent = '提交任务';
+                                            submitButton.style.background = '';
+                                            submitButton.style.opacity = '1';
+                                            submitButton.disabled = false;
+                                            // 移除所有创建的按钮
+                                            existingButtons.forEach(btn => btn.remove());
+                                            continueCreateBtn.remove();
+                                            if (submitButton.nextElementSibling) {
+                                                submitButton.nextElementSibling.remove();
+                                            }
+                                        };
+                                        submitButton.parentElement.appendChild(continueCreateBtn);
+                                        
+                                        // 添加"查看任务列表"按钮
+                                        const viewTaskListBtn = document.createElement('button');
+                                        viewTaskListBtn.textContent = '查看任务列表';
+                                        viewTaskListBtn.className = 'btn btn-secondary btn-created';
+                                        viewTaskListBtn.style.marginLeft = '10px';
+                                        viewTaskListBtn.onclick = () => {
+                                            window.location.href = 'task_list.html';
+                                        };
+                                        submitButton.parentElement.appendChild(viewTaskListBtn);
+                                    }
+                                } else {
+                                    // 没找到任务，显示超时提示
+                                    showAlert('⚠️ 任务提交超时，但未找到新创建的任务。\n请查看任务列表确认任务状态，或重新提交。', 'error');
+                                    if (submitButton) {
+                                        submitButton.disabled = false;
+                                        submitButton.textContent = originalText;
+                                        submitButton.style.opacity = '1';
+                                    }
+                                }
+                            } else {
+                                showAlert('⚠️ 任务提交超时，但任务可能已创建成功。\n请查看任务列表确认任务状态。', 'info');
+                                if (submitButton) {
+                                    submitButton.disabled = false;
+                                    submitButton.textContent = originalText;
+                                    submitButton.style.opacity = '1';
+                                }
+                            }
+                        } catch (checkError) {
+                            console.error('Failed to check task status:', checkError);
+                            showAlert('⚠️ 任务提交超时，但任务可能已创建成功。\n请查看任务列表确认任务状态。', 'info');
+                            if (submitButton) {
+                                submitButton.disabled = false;
+                                submitButton.textContent = originalText;
+                                submitButton.style.opacity = '1';
+                            }
+                        }
+                        isSubmitting = false;
+                    }, 2000);
+                } else {
+                    showAlert('任务创建失败: ' + (error.message || '未知错误'), 'error');
+                    
+                    // 恢复按钮状态
+                    if (submitButton) {
+                        submitButton.disabled = false;
+                        submitButton.textContent = originalText;
+                        submitButton.style.opacity = '1';
+                    }
+                    isSubmitting = false;
+                }
+            }
+        }
+        
+        function showAlert(message, type, duration = 5000) {
+            const container = document.getElementById('alertContainer');
+            if (!container) {
+                console.error('Alert container not found');
+                return;
+            }
+            
+            // 清除之前的提示（只保留最新的）
+            container.innerHTML = '';
+            
+            const alert = document.createElement('div');
+            alert.className = `alert alert-${type === 'error' ? 'danger' : type} alert-dismissible fade show`;
+            alert.style.marginTop = '20px';
+            alert.style.whiteSpace = 'pre-line'; // 支持多行消息
+            alert.style.fontSize = '14px';
+            alert.style.lineHeight = '1.6';
+            
+            // 支持多行消息（将\n转换为<br>）
+            alert.innerHTML = message.replace(/\n/g, '<br>');
+            
+            // 添加关闭按钮（对于info和success类型）
+            if (type === 'info' || type === 'success') {
+                const closeBtn = document.createElement('button');
+                closeBtn.type = 'button';
+                closeBtn.className = 'close';
+                closeBtn.setAttribute('aria-label', 'Close');
+                closeBtn.innerHTML = '<span aria-hidden="true">&times;</span>';
+                closeBtn.onclick = () => {
+                    alert.remove();
+                };
+                alert.insertBefore(closeBtn, alert.firstChild);
+            }
+            
+            container.appendChild(alert);
+            
+            // 根据类型设置自动关闭时间（duration=0表示不自动关闭）
+            if (duration === 0) {
+                // 不自动关闭
+                return;
+            }
+            
+            const autoCloseDuration = duration || (type === 'success' ? 10000 : 5000);
+            if (autoCloseDuration > 0) {
+                setTimeout(() => {
+                    if (alert.parentElement) {
+                        alert.classList.remove('show');
+                        setTimeout(() => {
+                            if (alert.parentElement) {
+                                alert.remove();
+                            }
+                        }, 150); // 等待fade动画完成
+                    }
+                }, autoCloseDuration);
+            }
+        }
+    </script>
+</body>
+</html>
+

@@ -1,0 +1,923 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>任务列表 - 多机器人调度系统</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #f5f5f5;
+            padding: 2rem;
+        }
+        
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 1rem 2rem;
+            border-radius: 8px;
+            margin-bottom: 2rem;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .header h1 {
+            font-size: 1.5rem;
+            font-weight: 600;
+        }
+        
+        .btn {
+            padding: 0.5rem 1rem;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.9rem;
+            transition: all 0.2s;
+            text-decoration: none;
+            display: inline-block;
+        }
+        
+        .btn-primary {
+            background: #667eea;
+            color: white;
+        }
+        
+        .btn-primary:hover {
+            background: #5568d3;
+        }
+        
+        .btn-secondary {
+            background: rgba(255, 255, 255, 0.2);
+            color: white;
+            border: 1px solid rgba(255, 255, 255, 0.3);
+        }
+        
+        .btn-secondary:hover {
+            background: rgba(255, 255, 255, 0.3);
+        }
+        
+        .btn-small {
+            padding: 0.4rem 0.8rem;
+            font-size: 0.8rem;
+            border: none;
+            border-radius: 3px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        
+        .btn-info {
+            background: #17a2b8;
+            color: white;
+        }
+        
+        .btn-info:hover {
+            background: #138496;
+        }
+        
+        .btn-danger {
+            background: #dc3545;
+            color: white;
+        }
+        
+        .btn-danger:hover {
+            background: #c82333;
+        }
+        
+        .btn-success {
+            background: #28a745;
+            color: white;
+        }
+        
+        .btn-success:hover {
+            background: #218838;
+        }
+        
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+        
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1rem;
+            margin-bottom: 1.5rem;
+        }
+        
+        .stat-card {
+            background: white;
+            padding: 1.5rem;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            text-align: center;
+        }
+        
+        .stat-card h3 {
+            font-size: 0.9rem;
+            color: #666;
+            margin-bottom: 0.5rem;
+        }
+        
+        .stat-card .value {
+            font-size: 2.5rem;
+            font-weight: 600;
+            color: #667eea;
+        }
+        
+        .filters {
+            background: white;
+            padding: 1.5rem;
+            border-radius: 8px;
+            margin-bottom: 1.5rem;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+        
+        .filters h3 {
+            font-size: 1rem;
+            color: #333;
+            margin-bottom: 1rem;
+        }
+        
+        .filter-row {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1rem;
+            margin-bottom: 1rem;
+        }
+        
+        .filter-group {
+            display: flex;
+            flex-direction: column;
+        }
+        
+        .filter-group label {
+            font-size: 0.85rem;
+            color: #666;
+            margin-bottom: 0.5rem;
+            font-weight: 500;
+        }
+        
+        .filter-group select,
+        .filter-group input {
+            padding: 0.5rem;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 0.9rem;
+        }
+        
+        .status-filter {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.5rem;
+            margin-top: 1rem;
+        }
+        
+        .status-filter button {
+            padding: 0.5rem 1rem;
+            border: 1px solid #ddd;
+            background: white;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: all 0.2s;
+            font-size: 0.85rem;
+        }
+        
+        .status-filter button.active {
+            background: #667eea;
+            color: white;
+            border-color: #667eea;
+        }
+        
+        .task-list {
+            display: grid;
+            gap: 1rem;
+        }
+        
+        .task-card {
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            padding: 1.5rem;
+            transition: all 0.2s;
+            border-left: 4px solid #667eea;
+        }
+        
+        .task-card:hover {
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+            transform: translateY(-2px);
+        }
+        
+        .task-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            margin-bottom: 1rem;
+            padding-bottom: 1rem;
+            border-bottom: 2px solid #f0f0f0;
+        }
+        
+        .task-title {
+            font-size: 1.1rem;
+            font-weight: 600;
+            color: #333;
+        }
+        
+        .task-status {
+            display: inline-block;
+            padding: 0.4rem 0.8rem;
+            border-radius: 4px;
+            font-size: 0.8rem;
+            font-weight: 600;
+        }
+        
+        .task-status.pending {
+            background: #ffc107;
+            color: #333;
+        }
+        
+        .task-status.assigned {
+            background: #17a2b8;
+            color: white;
+        }
+        
+        .task-status.executing {
+            background: #28a745;
+            color: white;
+        }
+        
+        .task-status.completed {
+            background: #6c757d;
+            color: white;
+        }
+        
+        .task-status.failed {
+            background: #dc3545;
+            color: white;
+        }
+        
+        .task-status.cancelled {
+            background: #6c757d;
+            color: white;
+        }
+        
+        .task-details {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 1rem;
+            margin-bottom: 1rem;
+        }
+        
+        .detail-item {
+            display: flex;
+            flex-direction: column;
+        }
+        
+        .detail-item label {
+            font-size: 0.75rem;
+            color: #667eea;
+            font-weight: 600;
+            margin-bottom: 0.25rem;
+        }
+        
+        .detail-item span {
+            font-size: 0.9rem;
+            color: #333;
+        }
+        
+        .pose-info {
+            font-family: 'Courier New', monospace;
+            font-size: 0.85rem;
+            color: #555;
+        }
+        
+        .task-actions {
+            display: flex;
+            gap: 0.5rem;
+            margin-top: 1rem;
+            padding-top: 1rem;
+            border-top: 1px solid #f0f0f0;
+        }
+        
+        .loading {
+            text-align: center;
+            padding: 3rem;
+            color: #666;
+            background: white;
+            border-radius: 8px;
+        }
+        
+        .empty {
+            text-align: center;
+            padding: 3rem;
+            color: #999;
+            background: white;
+            border-radius: 8px;
+        }
+        
+        .clear-filters {
+            margin-top: 1rem;
+            text-align: right;
+        }
+        
+        .pagination {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 0.5rem;
+            margin-top: 2rem;
+            padding: 1.5rem;
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+        
+        .pagination button {
+            padding: 0.5rem 1rem;
+            border: 1px solid #ddd;
+            background: white;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: all 0.2s;
+            font-size: 0.9rem;
+        }
+        
+        .pagination button:hover:not(:disabled) {
+            background: #667eea;
+            color: white;
+            border-color: #667eea;
+        }
+        
+        .pagination button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        
+        .pagination .page-info {
+            margin: 0 1rem;
+            color: #666;
+            font-size: 0.9rem;
+        }
+        
+        .pagination .page-size-select {
+            margin-left: 1rem;
+            padding: 0.5rem;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 0.9rem;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>📋 任务列表</h1>
+        <div>
+            <a href="/" class="btn btn-secondary">返回主页</a>
+        </div>
+    </div>
+    
+    <div class="container">
+        <div class="stats" id="stats">
+            <div class="stat-card">
+                <h3>总任务数</h3>
+                <div class="value" id="totalTasks">0</div>
+            </div>
+            <div class="stat-card">
+                <h3>待调度</h3>
+                <div class="value" id="pendingTasks">0</div>
+            </div>
+            <div class="stat-card">
+                <h3>执行中</h3>
+                <div class="value" id="executingTasks">0</div>
+            </div>
+            <div class="stat-card">
+                <h3>已完成</h3>
+                <div class="value" id="completedTasks">0</div>
+            </div>
+            <div class="stat-card">
+                <h3>失败</h3>
+                <div class="value" id="failedTasks" style="color: #dc3545;">0</div>
+            </div>
+            <div class="stat-card">
+                <h3>已取消</h3>
+                <div class="value" id="cancelledTasks" style="color: #6c757d;">0</div>
+            </div>
+        </div>
+        
+        <div class="filters">
+            <h3>筛选条件</h3>
+            <div class="filter-row">
+                <div class="filter-group">
+                    <label>机器人筛选:</label>
+                    <select id="robotFilter" onchange="applyFilters()">
+                        <option value="">全部机器人</option>
+                    </select>
+                </div>
+                <div class="filter-group">
+                    <label>开始日期:</label>
+                    <input type="date" id="startDate" onchange="applyFilters()">
+                </div>
+                <div class="filter-group">
+                    <label>结束日期:</label>
+                    <input type="date" id="endDate" onchange="applyFilters()">
+                </div>
+                <div class="filter-group">
+                    <label>排序方式:</label>
+                    <select id="sortOrder" onchange="applyFilters()">
+                        <option value="desc">创建时间降序（最新）</option>
+                        <option value="asc">创建时间升序（最早）</option>
+                    </select>
+                </div>
+            </div>
+            <div class="status-filter">
+                <button onclick="filterByStatus('all')" class="active" id="filter-all">全部</button>
+                <button onclick="filterByStatus('pending')" id="filter-pending">待调度</button>
+                <button onclick="filterByStatus('assigned')" id="filter-assigned">已分配</button>
+                <button onclick="filterByStatus('executing')" id="filter-executing">执行中</button>
+                <button onclick="filterByStatus('completed')" id="filter-completed">已完成</button>
+                <button onclick="filterByStatus('failed')" id="filter-failed">失败</button>
+                <button onclick="filterByStatus('cancelled')" id="filter-cancelled">已取消</button>
+            </div>
+            <div class="clear-filters">
+                <button class="btn btn-secondary" onclick="clearFilters()" style="background: #6c757d; color: white; border: none;">清除筛选</button>
+                <button class="btn btn-primary" onclick="refreshData()" style="margin-left: 0.5rem;">刷新</button>
+            </div>
+        </div>
+        
+        <div class="task-list" id="taskList">
+            <div class="loading">加载中...</div>
+        </div>
+        
+        <div class="pagination" id="pagination" style="display: none;">
+            <button onclick="goToPage(1)" id="btnFirst">首页</button>
+            <button onclick="goToPrevPage()" id="btnPrev">上一页</button>
+            <span class="page-info" id="pageInfo">第 1 页，共 1 页</span>
+            <button onclick="goToNextPage()" id="btnNext">下一页</button>
+            <button onclick="goToLastPage()" id="btnLast">末页</button>
+            <select class="page-size-select" id="pageSizeSelect" onchange="changePageSize()">
+                <option value="10">10条/页</option>
+                <option value="20" selected>20条/页</option>
+                <option value="50">50条/页</option>
+                <option value="100">100条/页</option>
+            </select>
+        </div>
+    </div>
+    
+    <script>
+        const API_BASE = window.location.origin;
+        let allTasks = [];
+        let allRobots = [];
+        let currentStatusFilter = 'all';
+        let currentRobotFilter = '';
+        let currentStartDate = '';
+        let currentEndDate = '';
+        let currentSortOrder = 'desc';
+        let autoRefreshInterval = null;
+        let isRefreshing = false;
+        let lastRefreshTime = 0;
+        
+        // 分页相关
+        let currentPage = 1;
+        let pageSize = 20;
+        let totalPages = 1;
+        let totalTasks = 0;
+        
+        // 初始化
+        window.onload = function() {
+            // 检查URL参数，如果有refresh参数，立即刷新
+            const urlParams = new URLSearchParams(window.location.search);
+            if (urlParams.has('refresh')) {
+                // 移除refresh参数，避免URL混乱
+                window.history.replaceState({}, document.title, window.location.pathname);
+                refreshData(true); // 强制刷新
+            } else {
+                refreshData();
+            }
+            // 自动刷新（每2秒，与首页保持一致，更快显示新任务）
+            autoRefreshInterval = setInterval(refreshData, 2000);
+        };
+        
+        // 页面获得焦点时立即刷新（确保从其他页面返回时能看到最新任务）
+        window.addEventListener('focus', function() {
+            refreshData(true); // 强制刷新
+        });
+        
+        // 页面可见性变化时刷新（当标签页切换回来时）
+        document.addEventListener('visibilitychange', function() {
+            if (!document.hidden) {
+                refreshData(true); // 强制刷新
+            }
+        });
+        
+        window.onbeforeunload = function() {
+            if (autoRefreshInterval) {
+                clearInterval(autoRefreshInterval);
+            }
+        };
+        
+        async function refreshData(force = false) {
+            // 防止频繁刷新（除非强制刷新）
+            const now = Date.now();
+            if (!force && isRefreshing) {
+                return; // 如果正在刷新，跳过
+            }
+            if (!force && now - lastRefreshTime < 500) {
+                return; // 如果距离上次刷新不到500ms，跳过（防止过于频繁）
+            }
+            
+            isRefreshing = true;
+            lastRefreshTime = now;
+            
+            try {
+                // 构建查询参数
+                const params = new URLSearchParams();
+                if (currentStatusFilter !== 'all') {
+                    params.append('status', currentStatusFilter);
+                }
+                if (currentRobotFilter) {
+                    params.append('robot_id', currentRobotFilter);
+                }
+                if (currentStartDate) {
+                    params.append('start_date', currentStartDate);
+                }
+                if (currentEndDate) {
+                    params.append('end_date', currentEndDate);
+                }
+                params.append('sort_order', currentSortOrder);
+                params.append('page', currentPage.toString());
+                params.append('page_size', pageSize.toString());
+                
+                // 获取任务列表（带分页）
+                const tasksResponse = await fetch(`${API_BASE}/api/tasks/?${params.toString()}`);
+                if (!tasksResponse.ok) {
+                    throw new Error(`HTTP ${tasksResponse.status}: ${tasksResponse.statusText}`);
+                }
+                const data = await tasksResponse.json();
+                
+                // 处理新的响应格式
+                allTasks = data.tasks || [];
+                if (data.pagination) {
+                    currentPage = data.pagination.page;
+                    pageSize = data.pagination.page_size;
+                    totalPages = data.pagination.total_pages;
+                    totalTasks = data.pagination.total;
+                }
+                
+                // 更新统计信息
+                if (data.stats) {
+                    updateStatsFromAPI(data.stats);
+                }
+                
+                // 获取机器人列表
+                try {
+                    const robotsResponse = await fetch(`${API_BASE}/api/robots/`);
+                    if (robotsResponse.ok) {
+                        allRobots = await robotsResponse.json();
+                        updateRobotFilter();
+                    }
+                } catch (e) {
+                    console.warn('Failed to fetch robots:', e);
+                }
+                
+                // 显示任务和更新分页（筛选和排序已在后端完成）
+                displayTasks(allTasks);
+                updatePagination();
+            } catch (error) {
+                console.error('Failed to fetch tasks:', error);
+                const errorMsg = error.message || '未知错误';
+                document.getElementById('taskList').innerHTML = `
+                    <div class="loading" style="color: #dc3545;">
+                        <h3>加载失败</h3>
+                        <p>错误信息: ${errorMsg}</p>
+                        <p>请检查网络连接或刷新页面重试</p>
+                    </div>
+                `;
+                // 隐藏分页控件
+                document.getElementById('pagination').style.display = 'none';
+            } finally {
+                isRefreshing = false;
+            }
+        }
+        
+        function updateRobotFilter() {
+            const select = document.getElementById('robotFilter');
+            const currentValue = select.value;
+            
+            // 从任务中获取所有唯一的机器人ID
+            const taskRobotIds = [...new Set(allTasks.map(t => t.robot_id).filter(id => id))];
+            
+            // 从机器人列表中获取所有机器人ID
+            const apiRobotIds = allRobots.map(r => r.robot_id || r.id).filter(id => id);
+            
+            // 合并并去重
+            const allRobotIds = [...new Set([...taskRobotIds, ...apiRobotIds])];
+            allRobotIds.sort();
+            
+            select.innerHTML = '<option value="">全部机器人</option>';
+            allRobotIds.forEach(robotId => {
+                const option = document.createElement('option');
+                option.value = robotId;
+                option.textContent = robotId;
+                if (robotId === currentValue) {
+                    option.selected = true;
+                }
+                select.appendChild(option);
+            });
+        }
+        
+        function updateStats(tasks = null) {
+            // 如果没有传入任务列表，使用所有任务；否则使用传入的任务列表（筛选后的）
+            const tasksToCount = tasks !== null ? tasks : allTasks;
+            
+            const total = tasksToCount.length;
+            const pending = tasksToCount.filter(t => t.status === 'pending').length;
+            const executing = tasksToCount.filter(t => t.status === 'executing' || t.status === 'assigned').length;
+            const completed = tasksToCount.filter(t => t.status === 'completed').length;
+            const failed = tasksToCount.filter(t => t.status === 'failed').length;
+            const cancelled = tasksToCount.filter(t => t.status === 'cancelled').length;
+            
+            document.getElementById('totalTasks').textContent = total;
+            document.getElementById('pendingTasks').textContent = pending;
+            document.getElementById('executingTasks').textContent = executing;
+            document.getElementById('completedTasks').textContent = completed;
+            document.getElementById('failedTasks').textContent = failed;
+            document.getElementById('cancelledTasks').textContent = cancelled;
+        }
+        
+        function updateStatsFromAPI(stats) {
+            // 使用API返回的统计信息
+            document.getElementById('totalTasks').textContent = stats.total || 0;
+            document.getElementById('pendingTasks').textContent = stats.pending || 0;
+            document.getElementById('executingTasks').textContent = (stats.executing || 0) + (stats.assigned || 0);
+            document.getElementById('completedTasks').textContent = stats.completed || 0;
+            document.getElementById('failedTasks').textContent = stats.failed || 0;
+            document.getElementById('cancelledTasks').textContent = stats.cancelled || 0;
+        }
+        
+        function filterByStatus(status) {
+            currentStatusFilter = status;
+            
+            // 更新按钮状态
+            document.querySelectorAll('.status-filter button').forEach(btn => {
+                btn.classList.remove('active');
+            });
+            document.getElementById(`filter-${status}`).classList.add('active');
+            
+            // 重置到第一页并刷新
+            currentPage = 1;
+            refreshData();
+        }
+        
+        function applyFilters() {
+            // 获取筛选条件
+            currentRobotFilter = document.getElementById('robotFilter').value;
+            currentStartDate = document.getElementById('startDate').value;
+            currentEndDate = document.getElementById('endDate').value;
+            currentSortOrder = document.getElementById('sortOrder').value;
+            
+            // 重置到第一页
+            currentPage = 1;
+            
+            // 重新加载数据（筛选在服务端完成）
+            refreshData();
+        }
+        
+        function clearFilters() {
+            document.getElementById('robotFilter').value = '';
+            document.getElementById('startDate').value = '';
+            document.getElementById('endDate').value = '';
+            document.getElementById('sortOrder').value = 'desc';
+            currentStatusFilter = 'all';
+            currentRobotFilter = '';
+            currentStartDate = '';
+            currentEndDate = '';
+            currentSortOrder = 'desc';
+            
+            // 更新状态筛选按钮
+            document.querySelectorAll('.status-filter button').forEach(btn => {
+                btn.classList.remove('active');
+            });
+            document.getElementById('filter-all').classList.add('active');
+            
+            applyFilters();
+        }
+        
+        function updatePagination() {
+            const pagination = document.getElementById('pagination');
+            const pageInfo = document.getElementById('pageInfo');
+            const btnPrev = document.getElementById('btnPrev');
+            const btnNext = document.getElementById('btnNext');
+            const btnFirst = document.getElementById('btnFirst');
+            const btnLast = document.getElementById('btnLast');
+            
+            if (totalPages <= 1) {
+                pagination.style.display = 'none';
+                return;
+            }
+            
+            pagination.style.display = 'flex';
+            pageInfo.textContent = `第 ${currentPage} 页，共 ${totalPages} 页（共 ${totalTasks} 条）`;
+            
+            btnFirst.disabled = currentPage === 1;
+            btnPrev.disabled = currentPage === 1;
+            btnNext.disabled = currentPage === totalPages;
+            btnLast.disabled = currentPage === totalPages;
+        }
+        
+        function goToPage(page) {
+            if (page < 1 || page > totalPages) return;
+            currentPage = page;
+            refreshData();
+        }
+        
+        function goToPrevPage() {
+            if (currentPage > 1) {
+                goToPage(currentPage - 1);
+            }
+        }
+        
+        function goToNextPage() {
+            if (currentPage < totalPages) {
+                goToPage(currentPage + 1);
+            }
+        }
+        
+        function goToLastPage() {
+            goToPage(totalPages);
+        }
+        
+        function changePageSize() {
+            const newSize = parseInt(document.getElementById('pageSizeSelect').value);
+            pageSize = newSize;
+            currentPage = 1; // 重置到第一页
+            refreshData();
+        }
+        
+        function displayTasks(tasks) {
+            const container = document.getElementById('taskList');
+            
+            if (tasks.length === 0) {
+                container.innerHTML = '<div class="empty">暂无任务</div>';
+                return;
+            }
+            
+            container.innerHTML = tasks.map(task => {
+                const startPose = task.start_pose || { x: 0, y: 0, yaw: 0 };
+                const targetPose = task.target_pose || { x: 0, y: 0, yaw: 0 };
+                const status = task.status || 'unknown';
+                const taskId = task.task_id || 'unknown';
+                const priority = task.priority || 2;
+                const createdAt = task.created_at ? new Date(task.created_at).toLocaleString('zh-CN') : '未知';
+                const assignedAt = task.assigned_at ? new Date(task.assigned_at).toLocaleString('zh-CN') : '-';
+                const completedAt = task.completed_at ? new Date(task.completed_at).toLocaleString('zh-CN') : '-';
+                
+                return `
+                    <div class="task-card">
+                        <div class="task-header">
+                            <div class="task-title">
+                                任务 ${taskId}
+                                ${task.is_multi_action && task.actions ? `<span style="font-size: 0.85em; color: #667eea; margin-left: 0.5rem;">[多动作任务: ${task.actions.length}个动作]</span>` : ''}
+                            </div>
+                            <span class="task-status ${status}">${status}</span>
+                        </div>
+                        <div class="task-details">
+                            <div class="detail-item">
+                                <label>优先级</label>
+                                <span>${priority}</span>
+                            </div>
+                            <div class="detail-item">
+                                <label>分配的机器人</label>
+                                <span>${task.robot_id || '未分配'}</span>
+                            </div>
+                            <div class="detail-item">
+                                <label>创建时间</label>
+                                <span>${createdAt}</span>
+                            </div>
+                            <div class="detail-item">
+                                <label>分配时间</label>
+                                <span>${assignedAt}</span>
+                            </div>
+                            <div class="detail-item">
+                                <label>完成时间</label>
+                                <span>${completedAt}</span>
+                            </div>
+                            ${task.retry_count !== undefined ? `
+                                <div class="detail-item">
+                                    <label>重试次数</label>
+                                    <span>${task.retry_count}</span>
+                                </div>
+                            ` : ''}
+                        </div>
+                        <div class="task-details">
+                            <div class="detail-item">
+                                <label>起点位置</label>
+                                <span class="pose-info">X: ${startPose.x.toFixed(3)} | Y: ${startPose.y.toFixed(3)} | Yaw: ${startPose.yaw.toFixed(3)}</span>
+                            </div>
+                            <div class="detail-item">
+                                <label>目标位置</label>
+                                <span class="pose-info">
+                                    ${task.target_poi_name ? `<strong style="color: #667eea;">${task.target_poi_name}</strong><br>` : ''}
+                                    X: ${targetPose.x.toFixed(3)} | Y: ${targetPose.y.toFixed(3)} | Yaw: ${targetPose.yaw.toFixed(3)}
+                                </span>
+                            </div>
+                            ${task.is_multi_action && task.actions && task.actions.length > 0 ? `
+                                <div class="detail-item" style="grid-column: 1 / -1;">
+                                    <label>动作序列 (${task.actions.length}个动作)</label>
+                                    <div style="margin-top: 0.5rem; display: flex; flex-wrap: wrap; gap: 0.5rem;">
+                                        ${task.actions.map((action, index) => {
+                                            const isCurrent = task.current_action_index !== undefined && index === task.current_action_index;
+                                            let actionText = '';
+                                            if (action.action_type === 'move_to') {
+                                                if (action.poi_name) {
+                                                    const poiDisplay = action.poi_display_name || action.poi_name;
+                                                    actionText = `POI:${poiDisplay}`;
+                                                } else if (action.target_pose) {
+                                                    actionText = `坐标:(${action.target_pose.x.toFixed(1)},${action.target_pose.y.toFixed(1)})`;
+                                                }
+                                            } else if (action.action_type === 'wait') {
+                                                actionText = `等待:${action.wait_duration || 0}s`;
+                                            } else if (action.action_type === 'go_home') {
+                                                actionText = '回桩';
+                                            }
+                                            const statusClass = isCurrent ? 'current' : (index < (task.current_action_index || 0) ? 'completed' : 'pending');
+                                            return `<span style="padding: 0.25rem 0.5rem; background: ${statusClass === 'current' ? '#28a745' : (statusClass === 'completed' ? '#6c757d' : '#e9ecef')}; color: ${statusClass === 'current' || statusClass === 'completed' ? 'white' : '#495057'}; border-radius: 3px; font-size: 0.8rem;">${index + 1}.${actionText || action.action_type}</span>`;
+                                        }).join('')}
+                                    </div>
+                                </div>
+                            ` : ''}
+                        </div>
+                        ${task.error_message ? `
+                            <div class="detail-item" style="margin-top: 0.5rem;">
+                                <label>错误信息</label>
+                                <span style="color: #dc3545; font-weight: 500;">${task.error_message}</span>
+                            </div>
+                        ` : ''}
+                        <div class="task-actions">
+                            <button class="btn-small btn-info" onclick="viewTaskDetail('${taskId}')">查看详情</button>
+                            ${status === 'pending' || status === 'assigned' || status === 'executing' ? 
+                                `<button class="btn-small btn-danger" onclick="cancelTask('${taskId}')">取消</button>` : ''}
+                            ${status === 'failed' ? 
+                                `<button class="btn-small btn-success" onclick="resetTask('${taskId}')">重置</button>` : ''}
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+        
+        function viewTaskDetail(taskId) {
+            window.location.href = `task_detail.html?task_id=${taskId}`;
+        }
+        
+        async function cancelTask(taskId) {
+            if (!confirm('确定要取消这个任务吗？取消后机器人将返回充电桩。')) {
+                return;
+            }
+            
+            try {
+                const response = await fetch(`${API_BASE}/api/tasks/${taskId}`, {
+                    method: 'DELETE'
+                });
+                
+                if (response.ok) {
+                    alert('任务已取消，机器人正在返回充电桩');
+                    refreshData();
+                } else {
+                    const error = await response.json();
+                    alert('取消任务失败: ' + error.detail);
+                }
+            } catch (error) {
+                alert('取消任务失败: ' + error.message);
+            }
+        }
+        
+        async function resetTask(taskId) {
+            if (!confirm('确定要重置这个失败的任务吗？任务将重新进入待调度状态。')) {
+                return;
+            }
+            
+            try {
+                const response = await fetch(`${API_BASE}/api/tasks/${taskId}/reset`, {
+                    method: 'POST'
+                });
+                
+                if (response.ok) {
+                    alert('任务已重置');
+                    refreshData();
+                } else {
+                    const error = await response.json();
+                    alert('重置任务失败: ' + error.detail);
+                }
+            } catch (error) {
+                alert('重置任务失败: ' + error.message);
+            }
+        }
+    </script>
+</body>
+</html>

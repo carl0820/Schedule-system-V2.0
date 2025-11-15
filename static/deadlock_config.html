@@ -1,0 +1,498 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>死锁配置 - 多机器人调度系统</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #f5f5f5;
+            padding: 2rem;
+        }
+        
+        .container {
+            max-width: 1000px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            padding: 2rem;
+        }
+        
+        h1 {
+            color: #333;
+            margin-bottom: 0.5rem;
+            font-size: 1.8rem;
+        }
+        
+        .subtitle {
+            color: #666;
+            margin-bottom: 2rem;
+            font-size: 0.9rem;
+        }
+        
+        .config-section {
+            margin-bottom: 2rem;
+            padding: 1.5rem;
+            background: #f8f9fa;
+            border-radius: 6px;
+        }
+        
+        .config-section h2 {
+            font-size: 1.2rem;
+            color: #333;
+            margin-bottom: 1rem;
+            padding-bottom: 0.5rem;
+            border-bottom: 2px solid #667eea;
+        }
+        
+        .config-section p {
+            color: #666;
+            font-size: 0.9rem;
+            margin-bottom: 1rem;
+        }
+        
+        .form-group {
+            margin-bottom: 1.5rem;
+        }
+        
+        .form-group label {
+            display: block;
+            margin-bottom: 0.5rem;
+            font-weight: 500;
+            color: #333;
+            font-size: 0.95rem;
+        }
+        
+        .form-group .description {
+            font-size: 0.85rem;
+            color: #666;
+            margin-bottom: 0.5rem;
+            font-style: italic;
+        }
+        
+        .form-group input[type="number"] {
+            width: 100%;
+            padding: 0.75rem;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 0.9rem;
+        }
+        
+        .form-group input[type="number"]:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+        }
+        
+        .form-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 1rem;
+        }
+        
+        .btn {
+            padding: 0.75rem 1.5rem;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.9rem;
+            font-weight: 500;
+            transition: all 0.2s;
+        }
+        
+        .btn-primary {
+            background: #667eea;
+            color: white;
+        }
+        
+        .btn-primary:hover {
+            background: #5568d3;
+        }
+        
+        .btn-secondary {
+            background: #6c757d;
+            color: white;
+        }
+        
+        .btn-secondary:hover {
+            background: #5a6268;
+        }
+        
+        .btn-danger {
+            background: #dc3545;
+            color: white;
+        }
+        
+        .btn-danger:hover {
+            background: #c82333;
+        }
+        
+        .btn-group {
+            display: flex;
+            gap: 1rem;
+            margin-top: 2rem;
+            padding-top: 2rem;
+            border-top: 1px solid #e0e0e0;
+        }
+        
+        .alert {
+            padding: 1rem;
+            border-radius: 4px;
+            margin-bottom: 1rem;
+        }
+        
+        .alert-success {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        
+        .alert-error {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        
+        .alert-info {
+            background: #d1ecf1;
+            color: #0c5460;
+            border: 1px solid #bee5eb;
+        }
+        
+        .hidden {
+            display: none;
+        }
+        
+        .loading {
+            text-align: center;
+            padding: 2rem;
+            color: #666;
+        }
+        
+        .current-value {
+            font-size: 0.85rem;
+            color: #999;
+            margin-top: 0.25rem;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>⚙️ 死锁配置</h1>
+        <p class="subtitle">配置多机器人运行时的死锁检测和解除参数</p>
+        
+        <div id="alertContainer"></div>
+        
+        <div id="loadingIndicator" class="loading">
+            正在加载配置...
+        </div>
+        
+        <div id="configForm" class="hidden">
+            <!-- 死锁检测参数 -->
+            <div class="config-section">
+                <h2>死锁检测参数</h2>
+                <p>配置死锁检测的阈值和判定条件</p>
+                
+                <div class="form-group">
+                    <label>死锁判定阈值（秒）</label>
+                    <div class="description">机器人持续无法移动超过此时间才判定为死锁</div>
+                    <input type="number" id="deadlock_threshold" step="0.1" min="1.0" max="60.0">
+                    <div class="current-value" id="deadlock_threshold_current"></div>
+                </div>
+                
+                <div class="form-group">
+                    <label>机器人卡住判定阈值（米）</label>
+                    <div class="description">机器人在时间窗口内移动距离小于此值判定为卡住</div>
+                    <input type="number" id="robot_stuck_threshold" step="0.01" min="0.01" max="1.0">
+                    <div class="current-value" id="robot_stuck_threshold_current"></div>
+                </div>
+                
+                <div class="form-group">
+                    <label>机器人卡住时间窗口（秒）</label>
+                    <div class="description">检查机器人是否卡住的时间窗口</div>
+                    <input type="number" id="robot_stuck_time_window" step="0.1" min="1.0" max="30.0">
+                    <div class="current-value" id="robot_stuck_time_window_current"></div>
+                </div>
+            </div>
+            
+            <!-- 窄道检测参数 -->
+            <div class="config-section">
+                <h2>窄道检测参数</h2>
+                <p>配置窄道检测和窄道死锁相关参数</p>
+                
+                <div class="form-group">
+                    <label>窄道阈值（米）</label>
+                    <div class="description">通道宽度小于此值被认为是窄道</div>
+                    <input type="number" id="narrow_passage_threshold" step="0.1" min="0.3" max="3.0">
+                    <div class="current-value" id="narrow_passage_threshold_current"></div>
+                </div>
+                
+                <div class="form-group">
+                    <label>窄道检测距离（米）</label>
+                    <div class="description">检测窄道死锁时，机器人距离小于此值才进行检查</div>
+                    <input type="number" id="narrow_passage_detection_distance" step="0.1" min="0.5" max="5.0">
+                    <div class="current-value" id="narrow_passage_detection_distance_current"></div>
+                </div>
+                
+                <div class="form-group">
+                    <label>窄道死锁后退距离（米）</label>
+                    <div class="description">检测到窄道死锁时，机器人后退的距离</div>
+                    <input type="number" id="narrow_passage_backoff_distance" step="0.1" min="0.1" max="5.0">
+                    <div class="current-value" id="narrow_passage_backoff_distance_current"></div>
+                </div>
+            </div>
+            
+            <!-- 死锁解除参数 -->
+            <div class="config-section">
+                <h2>死锁解除参数</h2>
+                <p>配置不同类型死锁的解除策略参数</p>
+                
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>循环等待后退距离（米）</label>
+                        <div class="description">循环等待死锁时，机器人后退的距离</div>
+                        <input type="number" id="circular_wait_backoff_distance" step="0.1" min="0.1" max="5.0">
+                        <div class="current-value" id="circular_wait_backoff_distance_current"></div>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label>相互阻塞后退距离（米）</label>
+                        <div class="description">相互阻塞死锁时，机器人后退的距离</div>
+                        <input type="number" id="mutual_blocking_backoff_distance" step="0.1" min="0.1" max="5.0">
+                        <div class="current-value" id="mutual_blocking_backoff_distance_current"></div>
+                    </div>
+                </div>
+                
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>默认后退距离（米）</label>
+                        <div class="description">其他类型死锁的默认后退距离</div>
+                        <input type="number" id="default_backoff_distance" step="0.1" min="0.1" max="5.0">
+                        <div class="current-value" id="default_backoff_distance_current"></div>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label>相互阻塞判定距离（米）</label>
+                        <div class="description">两个机器人距离小于此值才判定为相互阻塞</div>
+                        <input type="number" id="mutual_blocking_distance" step="0.1" min="0.1" max="5.0">
+                        <div class="current-value" id="mutual_blocking_distance_current"></div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- 后退动作参数 -->
+            <div class="config-section">
+                <h2>后退动作参数</h2>
+                <p>配置机器人执行后退动作时的参数</p>
+                
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>后退速度比例</label>
+                        <div class="description">后退时的速度比例（0.0-1.0）</div>
+                        <input type="number" id="backoff_speed_ratio" step="0.1" min="0.1" max="1.0">
+                        <div class="current-value" id="backoff_speed_ratio_current"></div>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label>后退到达精度（米）</label>
+                        <div class="description">后退动作的到达精度要求</div>
+                        <input type="number" id="backoff_acceptable_precision" step="0.01" min="0.05" max="1.0">
+                        <div class="current-value" id="backoff_acceptable_precision_current"></div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- 历史记录参数 -->
+            <div class="config-section">
+                <h2>历史记录参数</h2>
+                <p>配置死锁历史记录的保留时间</p>
+                
+                <div class="form-group">
+                    <label>历史保留时间（秒）</label>
+                    <div class="description">死锁历史记录的保留时间，超过此时间的记录将被清理</div>
+                    <input type="number" id="history_retention_time" step="1.0" min="10.0" max="300.0">
+                    <div class="current-value" id="history_retention_time_current"></div>
+                </div>
+            </div>
+            
+            <div class="btn-group">
+                <button class="btn btn-primary" onclick="saveConfig()">保存配置</button>
+                <button class="btn btn-secondary" onclick="resetConfig()">重置为默认值</button>
+                <button class="btn btn-secondary" onclick="loadConfig()">重新加载</button>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        const API_BASE = window.location.origin;
+        let currentConfig = {};
+        
+        // 页面加载时获取配置
+        window.onload = function() {
+            loadConfig();
+        };
+        
+        async function loadConfig() {
+            try {
+                document.getElementById('loadingIndicator').classList.remove('hidden');
+                document.getElementById('configForm').classList.add('hidden');
+                
+                const response = await fetch(`${API_BASE}/api/system/config/deadlock`);
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                
+                const data = await response.json();
+                if (data.success) {
+                    currentConfig = data.config;
+                    populateForm(currentConfig);
+                    document.getElementById('loadingIndicator').classList.add('hidden');
+                    document.getElementById('configForm').classList.remove('hidden');
+                } else {
+                    throw new Error('Failed to load config');
+                }
+            } catch (error) {
+                showAlert('加载配置失败: ' + error.message, 'error');
+                document.getElementById('loadingIndicator').classList.add('hidden');
+            }
+        }
+        
+        function populateForm(config) {
+            // 填充表单字段
+            const fields = [
+                'deadlock_threshold',
+                'narrow_passage_threshold',
+                'narrow_passage_backoff_distance',
+                'circular_wait_backoff_distance',
+                'mutual_blocking_backoff_distance',
+                'default_backoff_distance',
+                'backoff_speed_ratio',
+                'backoff_acceptable_precision',
+                'robot_stuck_threshold',
+                'robot_stuck_time_window',
+                'mutual_blocking_distance',
+                'narrow_passage_detection_distance',
+                'history_retention_time'
+            ];
+            
+            fields.forEach(field => {
+                const input = document.getElementById(field);
+                const currentValueDiv = document.getElementById(field + '_current');
+                
+                if (input && config[field] !== undefined) {
+                    input.value = config[field];
+                    if (currentValueDiv) {
+                        currentValueDiv.textContent = `当前值: ${config[field]}`;
+                    }
+                }
+            });
+        }
+        
+        async function saveConfig() {
+            try {
+                // 收集表单数据
+                const configUpdate = {
+                    deadlock_threshold: parseFloat(document.getElementById('deadlock_threshold').value),
+                    narrow_passage_threshold: parseFloat(document.getElementById('narrow_passage_threshold').value),
+                    narrow_passage_backoff_distance: parseFloat(document.getElementById('narrow_passage_backoff_distance').value),
+                    circular_wait_backoff_distance: parseFloat(document.getElementById('circular_wait_backoff_distance').value),
+                    mutual_blocking_backoff_distance: parseFloat(document.getElementById('mutual_blocking_backoff_distance').value),
+                    default_backoff_distance: parseFloat(document.getElementById('default_backoff_distance').value),
+                    backoff_speed_ratio: parseFloat(document.getElementById('backoff_speed_ratio').value),
+                    backoff_acceptable_precision: parseFloat(document.getElementById('backoff_acceptable_precision').value),
+                    robot_stuck_threshold: parseFloat(document.getElementById('robot_stuck_threshold').value),
+                    robot_stuck_time_window: parseFloat(document.getElementById('robot_stuck_time_window').value),
+                    mutual_blocking_distance: parseFloat(document.getElementById('mutual_blocking_distance').value),
+                    narrow_passage_detection_distance: parseFloat(document.getElementById('narrow_passage_detection_distance').value),
+                    history_retention_time: parseFloat(document.getElementById('history_retention_time').value)
+                };
+                
+                // 验证数据
+                for (const [key, value] of Object.entries(configUpdate)) {
+                    if (isNaN(value) || value <= 0) {
+                        throw new Error(`无效的值: ${key} = ${value}`);
+                    }
+                    if (key === 'backoff_speed_ratio' && (value < 0 || value > 1)) {
+                        throw new Error('后退速度比例必须在0-1之间');
+                    }
+                }
+                
+                const response = await fetch(`${API_BASE}/api/system/config/deadlock`, {
+                    method: 'PUT',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(configUpdate)
+                });
+                
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.detail || `HTTP ${response.status}: ${response.statusText}`);
+                }
+                
+                const data = await response.json();
+                if (data.success) {
+                    showAlert('配置保存成功！', 'success');
+                    // 重新加载配置以更新当前值显示
+                    setTimeout(() => loadConfig(), 1000);
+                } else {
+                    throw new Error('保存失败');
+                }
+            } catch (error) {
+                showAlert('保存配置失败: ' + error.message, 'error');
+            }
+        }
+        
+        async function resetConfig() {
+            if (!confirm('确定要重置所有配置为默认值吗？')) {
+                return;
+            }
+            
+            try {
+                const response = await fetch(`${API_BASE}/api/system/config/deadlock/reset`, {
+                    method: 'POST'
+                });
+                
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.detail || `HTTP ${response.status}: ${response.statusText}`);
+                }
+                
+                const data = await response.json();
+                if (data.success) {
+                    showAlert('配置已重置为默认值！', 'success');
+                    setTimeout(() => loadConfig(), 1000);
+                } else {
+                    throw new Error('重置失败');
+                }
+            } catch (error) {
+                showAlert('重置配置失败: ' + error.message, 'error');
+            }
+        }
+        
+        function showAlert(message, type) {
+            const container = document.getElementById('alertContainer');
+            const alert = document.createElement('div');
+            alert.className = `alert alert-${type}`;
+            alert.textContent = message;
+            container.innerHTML = '';
+            container.appendChild(alert);
+            
+            if (type === 'success') {
+                setTimeout(() => {
+                    alert.remove();
+                }, 3000);
+            }
+        }
+    </script>
+</body>
+</html>
+

@@ -1,0 +1,623 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>机器人列表 - 多机器人调度系统</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #f5f5f5;
+            padding: 2rem;
+        }
+        
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 1rem 2rem;
+            border-radius: 8px;
+            margin-bottom: 2rem;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .header h1 {
+            font-size: 1.5rem;
+            font-weight: 600;
+        }
+        
+        .btn {
+            padding: 0.5rem 1rem;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.9rem;
+            transition: all 0.2s;
+            text-decoration: none;
+            display: inline-block;
+        }
+        
+        .btn-primary {
+            background: #667eea;
+            color: white;
+        }
+        
+        .btn-primary:hover {
+            background: #5568d3;
+        }
+        
+        .btn-secondary {
+            background: rgba(255, 255, 255, 0.2);
+            color: white;
+            border: 1px solid rgba(255, 255, 255, 0.3);
+        }
+        
+        .btn-secondary:hover {
+            background: rgba(255, 255, 255, 0.3);
+        }
+        
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+        
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1rem;
+            margin-bottom: 1.5rem;
+        }
+        
+        .stat-card {
+            background: white;
+            padding: 1.5rem;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            text-align: center;
+        }
+        
+        .stat-card h3 {
+            font-size: 0.9rem;
+            color: #666;
+            margin-bottom: 0.5rem;
+        }
+        
+        .stat-card .value {
+            font-size: 2.5rem;
+            font-weight: 600;
+            color: #667eea;
+        }
+        
+        .filters {
+            background: white;
+            padding: 1.5rem;
+            border-radius: 8px;
+            margin-bottom: 1.5rem;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+        
+        .filters h3 {
+            font-size: 1rem;
+            color: #333;
+            margin-bottom: 1rem;
+        }
+        
+        .filter-row {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1rem;
+            margin-bottom: 1rem;
+        }
+        
+        .filter-group {
+            display: flex;
+            flex-direction: column;
+        }
+        
+        .filter-group label {
+            font-size: 0.85rem;
+            color: #666;
+            margin-bottom: 0.5rem;
+            font-weight: 500;
+        }
+        
+        .filter-group select,
+        .filter-group input {
+            padding: 0.5rem;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 0.9rem;
+        }
+        
+        .status-filter {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.5rem;
+            margin-top: 1rem;
+        }
+        
+        .status-filter button {
+            padding: 0.5rem 1rem;
+            border: 1px solid #ddd;
+            background: white;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: all 0.2s;
+            font-size: 0.85rem;
+        }
+        
+        .status-filter button.active {
+            background: #667eea;
+            color: white;
+            border-color: #667eea;
+        }
+        
+        .robot-list {
+            display: grid;
+            gap: 1rem;
+        }
+        
+        .robot-card {
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            padding: 1.5rem;
+            transition: all 0.2s;
+            border-left: 4px solid #667eea;
+        }
+        
+        .robot-card:hover {
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+            transform: translateY(-2px);
+        }
+        
+        .robot-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            margin-bottom: 1rem;
+            padding-bottom: 1rem;
+            border-bottom: 2px solid #f0f0f0;
+        }
+        
+        .robot-title {
+            font-size: 1.1rem;
+            font-weight: 600;
+            color: #333;
+        }
+        
+        .robot-status {
+            display: inline-block;
+            padding: 0.4rem 0.8rem;
+            border-radius: 4px;
+            font-size: 0.8rem;
+            font-weight: 600;
+        }
+        
+        .robot-status.online {
+            background: #28a745;
+            color: white;
+        }
+        
+        .robot-status.offline {
+            background: #dc3545;
+            color: white;
+        }
+        
+        .robot-status.busy {
+            background: #ffc107;
+            color: #333;
+        }
+        
+        .robot-status.idle {
+            background: #17a2b8;
+            color: white;
+        }
+        
+        .robot-status.error {
+            background: #dc3545;
+            color: white;
+        }
+        
+        .robot-details {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 1rem;
+            margin-bottom: 1rem;
+        }
+        
+        .detail-item {
+            display: flex;
+            flex-direction: column;
+        }
+        
+        .detail-item label {
+            font-size: 0.75rem;
+            color: #667eea;
+            font-weight: 600;
+            margin-bottom: 0.25rem;
+        }
+        
+        .detail-item span {
+            font-size: 0.9rem;
+            color: #333;
+        }
+        
+        .pose-info {
+            font-family: 'Courier New', monospace;
+            font-size: 0.85rem;
+            color: #555;
+        }
+        
+        .loading {
+            text-align: center;
+            padding: 3rem;
+            color: #666;
+            background: white;
+            border-radius: 8px;
+        }
+        
+        .empty {
+            text-align: center;
+            padding: 3rem;
+            color: #999;
+            background: white;
+            border-radius: 8px;
+        }
+        
+        .clear-filters {
+            margin-top: 1rem;
+            text-align: right;
+        }
+        
+        .robot-actions {
+            display: flex;
+            gap: 0.5rem;
+            margin-top: 1rem;
+            padding-top: 1rem;
+            border-top: 1px solid #f0f0f0;
+        }
+        
+        .btn-small {
+            padding: 0.4rem 0.8rem;
+            font-size: 0.8rem;
+            border: none;
+            border-radius: 3px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        
+        .btn-go-home {
+            background: #17a2b8;
+            color: white;
+        }
+        
+        .btn-go-home:hover {
+            background: #138496;
+        }
+        
+        .btn-go-home:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>🤖 机器人列表</h1>
+        <div>
+            <a href="/" class="btn btn-secondary">返回主页</a>
+        </div>
+    </div>
+    
+    <div class="container">
+        <div class="stats" id="stats">
+            <div class="stat-card">
+                <h3>总机器人数</h3>
+                <div class="value" id="totalRobots">0</div>
+            </div>
+            <div class="stat-card">
+                <h3>在线</h3>
+                <div class="value" id="onlineRobots">0</div>
+            </div>
+            <div class="stat-card">
+                <h3>空闲</h3>
+                <div class="value" id="idleRobots">0</div>
+            </div>
+            <div class="stat-card">
+                <h3>忙碌</h3>
+                <div class="value" id="busyRobots">0</div>
+            </div>
+            <div class="stat-card">
+                <h3>离线</h3>
+                <div class="value" id="offlineRobots">0</div>
+            </div>
+        </div>
+        
+        <div class="filters">
+            <h3>筛选条件</h3>
+            <div class="filter-row">
+                <div class="filter-group">
+                    <label>机器人ID筛选:</label>
+                    <input type="text" id="robotIdFilter" placeholder="输入机器人ID" oninput="applyFilters()">
+                </div>
+                <div class="filter-group">
+                    <label>排序方式:</label>
+                    <select id="sortOrder" onchange="applyFilters()">
+                        <option value="id">按ID排序</option>
+                        <option value="status">按状态排序</option>
+                        <option value="battery">按电量排序</option>
+                    </select>
+                </div>
+            </div>
+            <div class="status-filter">
+                <button onclick="filterByStatus('all')" class="active" id="filter-all">全部</button>
+                <button onclick="filterByStatus('online')" id="filter-online">在线</button>
+                <button onclick="filterByStatus('idle')" id="filter-idle">空闲</button>
+                <button onclick="filterByStatus('busy')" id="filter-busy">忙碌</button>
+                <button onclick="filterByStatus('offline')" id="filter-offline">离线</button>
+                <button onclick="filterByStatus('error')" id="filter-error">错误</button>
+            </div>
+            <div class="clear-filters">
+                <button class="btn btn-secondary" onclick="clearFilters()" style="background: #6c757d; color: white; border: none;">清除筛选</button>
+                <button class="btn btn-primary" onclick="refreshData()" style="margin-left: 0.5rem;">刷新</button>
+            </div>
+        </div>
+        
+        <div class="robot-list" id="robotList">
+            <div class="loading">加载中...</div>
+        </div>
+    </div>
+    
+    <script>
+        const API_BASE = window.location.origin;
+        let allRobots = [];
+        let currentStatusFilter = 'all';
+        let currentRobotIdFilter = '';
+        let currentSortOrder = 'id';
+        let autoRefreshInterval = null;
+        
+        // 初始化
+        window.onload = function() {
+            refreshData();
+            // 自动刷新（每5秒）
+            autoRefreshInterval = setInterval(refreshData, 5000);
+        };
+        
+        window.onbeforeunload = function() {
+            if (autoRefreshInterval) {
+                clearInterval(autoRefreshInterval);
+            }
+        };
+        
+        async function refreshData() {
+            try {
+                // 使用轻量级API端点，只获取机器人状态（不包含地图和POI）
+                const response = await fetch(`${API_BASE}/api/robots/states`);
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                allRobots = await response.json();
+                
+                updateStats();
+                applyFilters();
+            } catch (error) {
+                console.error('Failed to fetch robots:', error);
+                document.getElementById('robotList').innerHTML = `
+                    <div class="loading">加载失败: ${error.message}</div>
+                `;
+            }
+        }
+        
+        function updateStats() {
+            const total = allRobots.length;
+            const online = allRobots.filter(r => r.status === 'online' || r.status === 'idle' || r.status === 'busy').length;
+            const idle = allRobots.filter(r => r.status === 'idle').length;
+            const busy = allRobots.filter(r => r.status === 'busy').length;
+            const offline = allRobots.filter(r => r.status === 'offline').length;
+            
+            document.getElementById('totalRobots').textContent = total;
+            document.getElementById('onlineRobots').textContent = online;
+            document.getElementById('idleRobots').textContent = idle;
+            document.getElementById('busyRobots').textContent = busy;
+            document.getElementById('offlineRobots').textContent = offline;
+        }
+        
+        function filterByStatus(status) {
+            currentStatusFilter = status;
+            
+            // 更新按钮状态
+            document.querySelectorAll('.status-filter button').forEach(btn => {
+                btn.classList.remove('active');
+            });
+            document.getElementById(`filter-${status}`).classList.add('active');
+            
+            applyFilters();
+        }
+        
+        function applyFilters() {
+            // 获取筛选条件
+            currentRobotIdFilter = document.getElementById('robotIdFilter').value.toLowerCase();
+            currentSortOrder = document.getElementById('sortOrder').value;
+            
+            // 应用筛选
+            let filteredRobots = allRobots;
+            
+            // 状态筛选
+            if (currentStatusFilter !== 'all') {
+                if (currentStatusFilter === 'online') {
+                    // "在线"包括 idle 和 busy 状态
+                    filteredRobots = filteredRobots.filter(robot => 
+                        robot.status === 'idle' || robot.status === 'busy' || robot.status === 'online'
+                    );
+                } else {
+                    filteredRobots = filteredRobots.filter(robot => robot.status === currentStatusFilter);
+                }
+            }
+            
+            // 机器人ID筛选
+            if (currentRobotIdFilter) {
+                filteredRobots = filteredRobots.filter(robot => 
+                    robot.robot_id && robot.robot_id.toLowerCase().includes(currentRobotIdFilter)
+                );
+            }
+            
+            // 排序
+            filteredRobots.sort((a, b) => {
+                if (currentSortOrder === 'id') {
+                    return (a.robot_id || '').localeCompare(b.robot_id || '');
+                } else if (currentSortOrder === 'status') {
+                    return (a.status || '').localeCompare(b.status || '');
+                } else if (currentSortOrder === 'battery') {
+                    const batteryA = a.power?.batteryPercentage || 0;
+                    const batteryB = b.power?.batteryPercentage || 0;
+                    return batteryB - batteryA; // 降序
+                }
+                return 0;
+            });
+            
+            displayRobots(filteredRobots);
+        }
+        
+        function clearFilters() {
+            document.getElementById('robotIdFilter').value = '';
+            document.getElementById('sortOrder').value = 'id';
+            currentStatusFilter = 'all';
+            currentRobotIdFilter = '';
+            currentSortOrder = 'id';
+            
+            // 更新状态筛选按钮
+            document.querySelectorAll('.status-filter button').forEach(btn => {
+                btn.classList.remove('active');
+            });
+            document.getElementById('filter-all').classList.add('active');
+            
+            applyFilters();
+        }
+        
+        function displayRobots(robots) {
+            const container = document.getElementById('robotList');
+            
+            if (robots.length === 0) {
+                container.innerHTML = '<div class="empty">暂无机器人</div>';
+                return;
+            }
+            
+            container.innerHTML = robots.map(robot => {
+                const pose = robot.pose || { x: 0, y: 0, yaw: 0 };
+                const status = robot.status || 'unknown';
+                const speed = robot.speed || { vx: 0, vy: 0, omega: 0 };
+                const power = robot.power || { batteryPercentage: 0, isCharging: false };
+                const health = robot.health || { hasError: false, hasFatal: false };
+                
+                const speedValue = Math.sqrt(speed.vx * speed.vx + speed.vy * speed.vy).toFixed(2);
+                const batteryPercentage = power.batteryPercentage || 0;
+                const isCharging = power.isCharging ? '(充电中)' : '';
+                
+                // 状态文本
+                let statusText = status;
+                if (status === 'online') {
+                    statusText = '在线';
+                } else if (status === 'offline') {
+                    statusText = '离线';
+                } else if (status === 'busy') {
+                    statusText = '忙碌';
+                } else if (status === 'idle') {
+                    statusText = '空闲';
+                } else if (status === 'error') {
+                    statusText = '错误';
+                }
+                
+                return `
+                    <div class="robot-card">
+                        <div class="robot-header">
+                            <div class="robot-title">🤖 ${robot.robot_id || 'Unknown'}</div>
+                            <span class="robot-status ${status}">${statusText}</span>
+                        </div>
+                        <div class="robot-details">
+                            <div class="detail-item">
+                                <label>位置</label>
+                                <span class="pose-info">X: ${pose.x.toFixed(3)} | Y: ${pose.y.toFixed(3)}</span>
+                            </div>
+                            <div class="detail-item">
+                                <label>角度</label>
+                                <span>${(pose.yaw * 180 / Math.PI).toFixed(1)}°</span>
+                            </div>
+                            <div class="detail-item">
+                                <label>速度</label>
+                                <span>${speedValue} m/s</span>
+                            </div>
+                            <div class="detail-item">
+                                <label>电量</label>
+                                <span style="font-weight: 600; ${batteryPercentage < 20 ? 'color: #dc3545;' : batteryPercentage < 50 ? 'color: #ffc107;' : 'color: #28a745;'}">
+                                    ${batteryPercentage}% ${isCharging}
+                                </span>
+                            </div>
+                            ${health.hasError || health.hasFatal ? `
+                                <div class="detail-item">
+                                    <label style="color: #dc3545;">警告</label>
+                                    <span style="color: #dc3545; font-weight: 500;">设备异常</span>
+                                </div>
+                            ` : ''}
+                        </div>
+                        <div class="robot-actions">
+                            ${status === 'online' || status === 'idle' || status === 'busy' ? `
+                                <button class="btn-small btn-go-home" onclick="goHome('${robot.robot_id}')" id="btn-go-home-${robot.robot_id}">
+                                    回桩
+                                </button>
+                            ` : ''}
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+        
+        async function goHome(robotId) {
+            if (!confirm(`确定要让机器人 ${robotId} 回桩吗？`)) {
+                return;
+            }
+            
+            const button = document.getElementById(`btn-go-home-${robotId}`);
+            if (button) {
+                button.disabled = true;
+                button.textContent = '回桩中...';
+            }
+            
+            try {
+                const response = await fetch(`${API_BASE}/api/robots/${robotId}/go-home`, {
+                    method: 'POST'
+                });
+                
+                if (response.ok) {
+                    const data = await response.json();
+                    alert(`机器人 ${robotId} 已开始回桩！\n操作ID: ${data.action_id || 'N/A'}`);
+                    // 刷新数据
+                    refreshData();
+                } else {
+                    const error = await response.json();
+                    alert(`回桩失败: ${error.detail || '未知错误'}`);
+                    if (button) {
+                        button.disabled = false;
+                        button.textContent = '回桩';
+                    }
+                }
+            } catch (error) {
+                alert(`回桩失败: ${error.message}`);
+                if (button) {
+                    button.disabled = false;
+                    button.textContent = '回桩';
+                }
+            }
+        }
+    </script>
+</body>
+</html>
+

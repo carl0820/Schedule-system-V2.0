@@ -1,0 +1,19 @@
+{
+  "deadlock": {
+    "deadlock_threshold": 10.0,
+    "narrow_passage_threshold": 1.0,
+    "narrow_passage_backoff_distance": 1.0,
+    "circular_wait_backoff_distance": 1.5,
+    "mutual_blocking_backoff_distance": 1.0,
+    "default_backoff_distance": 1.0,
+    "backoff_speed_ratio": 0.5,
+    "backoff_acceptable_precision": 0.2,
+    "robot_stuck_threshold": 0.1,
+    "robot_stuck_time_window": 10.0,
+    "mutual_blocking_distance": 1.0,
+    "narrow_passage_detection_distance": 2.0,
+    "history_retention_time": 60.0,
+    "updated_at": "2025-11-14T15:51:59.695897"
+  },
+  "updated_at": "2025-11-14T15:51:59.695897"
+}

@@ -1,0 +1,21 @@
+# 核心依赖（兼容 Python 3.13）
+fastapi>=0.104.1
+uvicorn[standard]>=0.24.0
+websockets>=12.0
+httpx>=0.25.2
+requests>=2.31.0  # Fallback for VPN environments where httpx fails
+pydantic>=2.5.0
+pydantic-settings>=2.1.0
+python-multipart>=0.0.6
+
+# 可选依赖
+redis>=5.0.1
+psycopg2-binary>=2.9.9,<3.0
+numpy>=1.24.3  # Python 3.13 需要 >= 1.26.0，但使用 >= 会自动选择合适版本
+python-jose[cryptography]>=3.3.0
+passlib[bcrypt]>=1.7.4
+psutil>=5.9.6
+
+# 注意：对于 Python 3.13，建议使用以下命令安装，避免编译问题：
+# pip install --only-binary :all: -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
+

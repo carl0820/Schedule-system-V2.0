@@ -1,0 +1,71 @@
+{
+  "5d87b06f-78b2-480e-886e-05552f13aec4": {
+    "map_id": "5d87b06f-78b2-480e-886e-05552f13aec4",
+    "name": "杨浦5F_phoebus",
+    "description": null,
+    "robot_id": "phoebus",
+    "is_default": false,
+    "created_at": "2025-11-14T12:59:05.650566",
+    "updated_at": "2025-11-14T12:59:05.650566",
+    "file_path": "5d87b06f-78b2-480e-886e-05552f13aec4.bin.gz",
+    "thumbnail_path": null,
+    "metadata": {
+      "width": 884,
+      "height": 516,
+      "resolution": 0.05000000074505806,
+      "origin_x": -13.099996566772461,
+      "origin_y": -14.099996566772461,
+      "min_x": -13.099996566772461,
+      "min_y": -14.099996566772461,
+      "max_x": 31.100004091858864,
+      "max_y": 11.700003817677498
+    },
+    "file_size": 456180
+  },
+  "55cb6f58-768f-4793-827c-548f1f993025": {
+    "map_id": "55cb6f58-768f-4793-827c-548f1f993025",
+    "name": "杨浦5F_P3",
+    "description": null,
+    "robot_id": "p3_1",
+    "is_default": false,
+    "created_at": "2025-11-14T13:11:13.353599",
+    "updated_at": "2025-11-14T13:11:13.353599",
+    "file_path": "55cb6f58-768f-4793-827c-548f1f993025.bin.gz",
+    "thumbnail_path": null,
+    "metadata": {
+      "width": 884,
+      "height": 516,
+      "resolution": 0.05000000074505806,
+      "origin_x": -13.100007057189941,
+      "origin_y": -14.100018501281738,
+      "min_x": -13.100007057189941,
+      "min_y": -14.100018501281738,
+      "max_x": 31.099993601441383,
+      "max_y": 11.69998188316822
+    },
+    "file_size": 456180
+  },
+  "d50e98ed-5ca7-49fb-adda-d8044ae4f56a": {
+    "map_id": "d50e98ed-5ca7-49fb-adda-d8044ae4f56a",
+    "name": "杨浦5F",
+    "description": "增加了虚拟墙在P3的地图，用来模拟窄道测试死锁功能",
+    "robot_id": "p3_1",
+    "is_default": true,
+    "created_at": "2025-11-14T21:59:03.228765",
+    "updated_at": "2025-11-14T21:59:03.228765",
+    "file_path": "d50e98ed-5ca7-49fb-adda-d8044ae4f56a.bin.gz",
+    "thumbnail_path": null,
+    "metadata": {
+      "width": 884,
+      "height": 516,
+      "resolution": 0.05000000074505806,
+      "origin_x": -13.100007057189941,
+      "origin_y": -14.100018501281738,
+      "min_x": -13.100007057189941,
+      "min_y": -14.100018501281738,
+      "max_x": 31.099993601441383,
+      "max_y": 11.69998188316822
+    },
+    "file_size": 456180
+  }
+}
