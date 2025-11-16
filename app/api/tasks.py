@@ -175,6 +175,83 @@ async def list_tasks(
                         return name
             return None
         
+        # 时间筛选（在转换为字典之前进行，直接使用datetime对象比较，更可靠）
+        from datetime import datetime, date
+        if start_date or end_date:
+            try:
+                start_dt = None
+                end_dt = None
+                
+                if start_date:
+                    start_dt = datetime.strptime(start_date, "%Y-%m-%d")
+                    start_dt = start_dt.replace(hour=0, minute=0, second=0, microsecond=0)
+                
+                if end_date:
+                    end_dt = datetime.strptime(end_date, "%Y-%m-%d")
+                    end_dt = end_dt.replace(hour=23, minute=59, second=59, microsecond=999999)
+                
+                # 在Task对象级别进行筛选
+                filtered_tasks = []
+                for task in tasks:
+                    if not task.created_at:
+                        # 如果没有创建时间，跳过该任务（不包含在结果中）
+                        continue
+                    
+                    task_date = task.created_at
+                    task_dt = None
+                    
+                    # 处理datetime对象（最常见的情况）
+                    if isinstance(task_date, datetime):
+                        # 如果是带时区的datetime，转换为本地时间（naive datetime）
+                        if task_date.tzinfo is not None:
+                            # 移除时区信息，使用本地时间进行比较
+                            task_dt = task_date.replace(tzinfo=None)
+                        else:
+                            task_dt = task_date
+                    elif isinstance(task_date, str):
+                        # 如果是字符串，尝试解析
+                        try:
+                            # 尝试解析ISO格式字符串
+                            if "T" in task_date:
+                                # 处理ISO格式，移除时区信息
+                                date_str = task_date.replace("Z", "")
+                                if "+" in date_str:
+                                    date_str = date_str.split("+")[0]
+                                elif date_str.count("-") >= 5:  # 有时区偏移，如 2024-01-01T12:00:00-05:00
+                                    date_str = date_str.rsplit("-", 2)[0]
+                                
+                                if "." in date_str:
+                                    # 有微秒，如 2024-01-01T12:00:00.123456
+                                    parts = date_str.split(".")
+                                    task_dt = datetime.strptime(parts[0], "%Y-%m-%dT%H:%M:%S")
+                                else:
+                                    # 无微秒，如 2024-01-01T12:00:00
+                                    task_dt = datetime.strptime(date_str, "%Y-%m-%dT%H:%M:%S")
+                            else:
+                                # 简单日期格式，如 2024-01-01
+                                task_dt = datetime.strptime(task_date.split()[0], "%Y-%m-%d")
+                        except Exception as e:
+                            logger.debug(f"Failed to parse created_at for task {task.task_id}: {task_date}, error: {e}")
+                            continue
+                    else:
+                        # 其他类型，跳过
+                        logger.debug(f"Unexpected created_at type for task {task.task_id}: {type(task_date)}")
+                        continue
+                    
+                    # 进行日期比较
+                    if task_dt:
+                        if start_dt and task_dt < start_dt:
+                            continue
+                        if end_dt and task_dt > end_dt:
+                            continue
+                        filtered_tasks.append(task)
+                
+                original_count = len(tasks)
+                tasks = filtered_tasks
+                logger.debug(f"Time filter applied: start_date={start_date}, end_date={end_date}, filtered {len(filtered_tasks)} tasks from {original_count} total")
+            except Exception as e:
+                logger.warning(f"Invalid date format: start_date={start_date}, end_date={end_date}, error: {e}")
+        
         # 将Task对象转换为字典，并添加target_poi_name字段
         result = []
         for task in tasks:
@@ -227,85 +304,6 @@ async def list_tasks(
             # 添加target_poi_name字段
             task_dict["target_poi_name"] = target_poi_name
             result.append(task_dict)
-        
-        # 时间筛选
-        if start_date:
-            from datetime import datetime
-            try:
-                start_dt = datetime.strptime(start_date, "%Y-%m-%d")
-                start_dt = start_dt.replace(hour=0, minute=0, second=0, microsecond=0)
-                filtered_result = []
-                for t in result:
-                    if t.get("created_at"):
-                        try:
-                            # 处理ISO格式日期字符串
-                            created_str = str(t["created_at"])
-                            # 移除时区信息（如果有）
-                            if created_str.endswith("Z"):
-                                created_str = created_str[:-1]
-                            elif "+" in created_str:
-                                created_str = created_str.split("+")[0]
-                            elif created_str.count("-") == 5:  # 有时区偏移，如 2024-01-01T12:00:00-05:00
-                                created_str = created_str.rsplit("-", 2)[0]
-                            
-                            # 解析日期时间（支持微秒）
-                            if "." in created_str:
-                                # 有微秒，如 2024-01-01T12:00:00.123456
-                                parts = created_str.split(".")
-                                task_dt = datetime.strptime(parts[0], "%Y-%m-%dT%H:%M:%S")
-                            elif "T" in created_str:
-                                # 无微秒，如 2024-01-01T12:00:00
-                                task_dt = datetime.strptime(created_str, "%Y-%m-%dT%H:%M:%S")
-                            else:
-                                # 简单格式: 2024-01-01
-                                task_dt = datetime.strptime(created_str.split()[0], "%Y-%m-%d")
-                            if task_dt >= start_dt:
-                                filtered_result.append(t)
-                        except Exception as e:
-                            logger.debug(f"Failed to parse date {t.get('created_at')}: {e}")
-                            continue
-                result = filtered_result
-            except Exception as e:
-                logger.warning(f"Invalid start_date format: {start_date}, error: {e}")
-        
-        if end_date:
-            from datetime import datetime
-            try:
-                end_dt = datetime.strptime(end_date, "%Y-%m-%d")
-                end_dt = end_dt.replace(hour=23, minute=59, second=59, microsecond=999999)
-                filtered_result = []
-                for t in result:
-                    if t.get("created_at"):
-                        try:
-                            # 处理ISO格式日期字符串
-                            created_str = str(t["created_at"])
-                            # 移除时区信息（如果有）
-                            if created_str.endswith("Z"):
-                                created_str = created_str[:-1]
-                            elif "+" in created_str:
-                                created_str = created_str.split("+")[0]
-                            elif created_str.count("-") == 5:  # 有时区偏移，如 2024-01-01T12:00:00-05:00
-                                created_str = created_str.rsplit("-", 2)[0]
-                            
-                            # 解析日期时间（支持微秒）
-                            if "." in created_str:
-                                # 有微秒，如 2024-01-01T12:00:00.123456
-                                parts = created_str.split(".")
-                                task_dt = datetime.strptime(parts[0], "%Y-%m-%dT%H:%M:%S")
-                            elif "T" in created_str:
-                                # 无微秒，如 2024-01-01T12:00:00
-                                task_dt = datetime.strptime(created_str, "%Y-%m-%dT%H:%M:%S")
-                            else:
-                                # 简单格式: 2024-01-01
-                                task_dt = datetime.strptime(created_str.split()[0], "%Y-%m-%d")
-                            if task_dt <= end_dt:
-                                filtered_result.append(t)
-                        except Exception as e:
-                            logger.debug(f"Failed to parse date {t.get('created_at')}: {e}")
-                            continue
-                result = filtered_result
-            except Exception as e:
-                logger.warning(f"Invalid end_date format: {end_date}, error: {e}")
         
         # 排序
         if sort_order == "asc":

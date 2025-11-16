@@ -129,8 +129,11 @@ class TaskScheduler:
             for t in self.tasks.values()
         )
         
+        executing_count = sum(1 for t in self.tasks.values() 
+                             if t.status in [TaskStatus.EXECUTING, TaskStatus.ASSIGNED] and t.robot_id)
+        
         if has_executing_tasks or getattr(self, '_need_start_background_tasks', False):
-            logger.info("Found executing/assigned tasks, starting background tasks...")
+            logger.info(f"Found {executing_count} executing/assigned tasks, starting background tasks...")
             # 启动调度器
             if self._scheduler_task is None or (self._scheduler_task and self._scheduler_task.done()):
                 logger.info("Starting scheduler loop...")
@@ -144,9 +147,18 @@ class TaskScheduler:
             # 启动死锁检测任务
             if self._deadlock_check_task is None or (self._deadlock_check_task and self._deadlock_check_task.done()):
                 logger.info("Starting deadlock check loop...")
-                self._deadlock_check_task = asyncio.create_task(self._deadlock_check_loop())
-            logger.info("Background tasks started for existing executing tasks")
+                try:
+                    self._deadlock_check_task = asyncio.create_task(self._deadlock_check_loop())
+                    logger.info("Deadlock check loop started successfully")
+                except Exception as e:
+                    logger.error(f"Failed to start deadlock check loop: {e}", exc_info=True)
+            else:
+                logger.info(f"Deadlock check loop already running (task state: done={self._deadlock_check_task.done()})")
+            
+            logger.info(f"Background tasks started for {executing_count} existing executing tasks")
             self._need_start_background_tasks = False
+        else:
+            logger.debug(f"No executing tasks found ({executing_count} executing/assigned tasks), background tasks not started")
     
     def _load_tasks_from_file(self):
         """从文件加载已保存的任务"""
@@ -554,9 +566,15 @@ class TaskScheduler:
         logger.info(f"Task {task_id} cancelled")
         return True
     
+    async def start_background_tasks_if_needed(self):
+        """公共方法：确保后台任务（死锁检测、碰撞检测等）已启动"""
+        await self._start_background_tasks_if_needed_async()
+    
     async def _scheduler_loop(self):
         """任务调度循环"""
         logger.info("Task scheduler loop started")
+        # 确保死锁检测循环已启动（如果还没有启动）
+        await self._start_background_tasks_if_needed_async()
         loop_count = 0
         while True:
             try:

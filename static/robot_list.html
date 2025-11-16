@@ -308,12 +308,129 @@
             opacity: 0.5;
             cursor: not-allowed;
         }
+        
+        .btn-danger {
+            background: #dc3545;
+            color: white;
+        }
+        
+        .btn-danger:hover {
+            background: #c82333;
+        }
+        
+        .btn-success {
+            background: #28a745;
+            color: white;
+        }
+        
+        .btn-success:hover {
+            background: #218838;
+        }
+        
+        /* 模态框样式 */
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 1000;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0,0,0,0.5);
+        }
+        
+        .modal-content {
+            background-color: white;
+            margin: 5% auto;
+            padding: 2rem;
+            border-radius: 8px;
+            width: 90%;
+            max-width: 500px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+        }
+        
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1.5rem;
+            padding-bottom: 1rem;
+            border-bottom: 2px solid #f0f0f0;
+        }
+        
+        .modal-header h2 {
+            margin: 0;
+            color: #333;
+            font-size: 1.5rem;
+        }
+        
+        .close {
+            color: #aaa;
+            font-size: 28px;
+            font-weight: bold;
+            cursor: pointer;
+            border: none;
+            background: none;
+        }
+        
+        .close:hover {
+            color: #000;
+        }
+        
+        .form-group {
+            margin-bottom: 1.5rem;
+        }
+        
+        .form-group label {
+            display: block;
+            margin-bottom: 0.5rem;
+            color: #333;
+            font-weight: 500;
+        }
+        
+        .form-group input {
+            width: 100%;
+            padding: 0.75rem;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 0.9rem;
+            box-sizing: border-box;
+        }
+        
+        .form-group input:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 0 2px rgba(102, 126, 234, 0.2);
+        }
+        
+        .form-group .help-text {
+            font-size: 0.8rem;
+            color: #666;
+            margin-top: 0.25rem;
+        }
+        
+        .modal-actions {
+            display: flex;
+            justify-content: flex-end;
+            gap: 0.5rem;
+            margin-top: 2rem;
+        }
+        
+        .btn-delete {
+            background: #dc3545;
+            color: white;
+        }
+        
+        .btn-delete:hover {
+            background: #c82333;
+        }
     </style>
 </head>
 <body>
     <div class="header">
         <h1>🤖 机器人列表</h1>
         <div>
+            <button class="btn btn-success" onclick="showRegisterModal()" style="margin-right: 0.5rem;">+ 注册机器人</button>
             <a href="/" class="btn btn-secondary">返回主页</a>
         </div>
     </div>
@@ -574,6 +691,9 @@
                                     回桩
                                 </button>
                             ` : ''}
+                            <button class="btn-small btn-delete" onclick="deleteRobot('${robot.robot_id}')" id="btn-delete-${robot.robot_id}">
+                                删除
+                            </button>
                         </div>
                     </div>
                 `;
@@ -617,7 +737,159 @@
                 }
             }
         }
+        
+        // 注册机器人模态框
+        function showRegisterModal() {
+            document.getElementById('registerModal').style.display = 'block';
+            // 清空表单
+            document.getElementById('registerRobotId').value = '';
+            document.getElementById('registerBaseUrl').value = '';
+        }
+        
+        function closeRegisterModal() {
+            document.getElementById('registerModal').style.display = 'none';
+        }
+        
+        // 点击模态框外部关闭
+        window.onclick = function(event) {
+            const modal = document.getElementById('registerModal');
+            if (event.target == modal) {
+                modal.style.display = 'none';
+            }
+        }
+        
+        async function registerRobot() {
+            const robotId = document.getElementById('registerRobotId').value.trim();
+            const baseUrl = document.getElementById('registerBaseUrl').value.trim();
+            
+            if (!robotId) {
+                alert('请输入机器人ID');
+                return;
+            }
+            
+            if (!baseUrl) {
+                alert('请输入机器人地址（IP或URL）');
+                return;
+            }
+            
+            const submitBtn = document.getElementById('registerSubmitBtn');
+            submitBtn.disabled = true;
+            submitBtn.textContent = '注册中...';
+            
+            try {
+                const response = await fetch(`${API_BASE}/api/robots/register`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        robot_id: robotId,
+                        base_url: baseUrl
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok) {
+                    alert(`机器人 ${robotId} 注册成功！\n地址: ${data.base_url}`);
+                    closeRegisterModal();
+                    // 刷新数据
+                    refreshData();
+                } else {
+                    alert(`注册失败: ${data.detail || '未知错误'}`);
+                }
+            } catch (error) {
+                alert(`注册失败: ${error.message}`);
+            } finally {
+                submitBtn.disabled = false;
+                submitBtn.textContent = '注册';
+            }
+        }
+        
+        async function deleteRobot(robotId) {
+            if (!confirm(`确定要删除机器人 ${robotId} 吗？\n\n此操作不可撤销！`)) {
+                return;
+            }
+            
+            const button = document.getElementById(`btn-delete-${robotId}`);
+            if (button) {
+                button.disabled = true;
+                button.textContent = '删除中...';
+            }
+            
+            try {
+                const response = await fetch(`${API_BASE}/api/robots/${robotId}`, {
+                    method: 'DELETE'
+                });
+                
+                if (response.ok) {
+                    const data = await response.json();
+                    alert(`机器人 ${robotId} 已删除！`);
+                    // 刷新数据
+                    refreshData();
+                } else {
+                    const error = await response.json();
+                    alert(`删除失败: ${error.detail || '未知错误'}`);
+                    if (button) {
+                        button.disabled = false;
+                        button.textContent = '删除';
+                    }
+                }
+            } catch (error) {
+                alert(`删除失败: ${error.message}`);
+                if (button) {
+                    button.disabled = false;
+                    button.textContent = '删除';
+                }
+            }
+        }
+        
+        // 支持回车键提交注册表单
+        document.addEventListener('DOMContentLoaded', function() {
+            const robotIdInput = document.getElementById('registerRobotId');
+            const baseUrlInput = document.getElementById('registerBaseUrl');
+            
+            if (robotIdInput) {
+                robotIdInput.addEventListener('keypress', function(e) {
+                    if (e.key === 'Enter') {
+                        baseUrlInput.focus();
+                    }
+                });
+            }
+            
+            if (baseUrlInput) {
+                baseUrlInput.addEventListener('keypress', function(e) {
+                    if (e.key === 'Enter') {
+                        registerRobot();
+                    }
+                });
+            }
+        });
     </script>
+    
+    <!-- 注册机器人模态框 -->
+    <div id="registerModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>注册新机器人</h2>
+                <button class="close" onclick="closeRegisterModal()">&times;</button>
+            </div>
+            <div class="form-group">
+                <label for="registerRobotId">机器人ID *</label>
+                <input type="text" id="registerRobotId" placeholder="例如: robot1" required>
+                <div class="help-text">机器人的唯一标识符</div>
+            </div>
+            <div class="form-group">
+                <label for="registerBaseUrl">机器人地址 *</label>
+                <input type="text" id="registerBaseUrl" placeholder="例如: 10.160.128.91 或 http://10.160.128.91:1448" required>
+                <div class="help-text">机器人的IP地址或完整URL（如果只输入IP，将自动添加 http:// 和端口 :1448）</div>
+            </div>
+            <div class="modal-actions">
+                <button class="btn btn-secondary" onclick="closeRegisterModal()">取消</button>
+                <button class="btn btn-success" id="registerSubmitBtn" onclick="registerRobot()">注册</button>
+            </div>
+        </div>
+    </div>
 </body>
 </html>
 
