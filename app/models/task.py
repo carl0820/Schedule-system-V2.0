@@ -59,11 +59,103 @@ class MultiActionTaskCreate(BaseModel):
     actions: List[ActionItem]  # 动作序列
     priority: Optional[TaskPriority] = None  # 优先级（可选，如果不指定则自动计算）
     start_pose: Optional[Pose] = None  # 起点（可选，默认使用机器人当前位置）
+    
+    class Config:
+        json_schema_extra = {
+            "examples": [
+                {
+                    "summary": "移动到坐标并等待10秒（推荐）",
+                    "description": "使用坐标导航，移动到指定位置后等待10秒。这是最简单可靠的方式。",
+                    "value": {
+                        "actions": [
+                            {
+                                "action_type": "move_to",
+                                "target_pose": {
+                                    "x": 3.8,
+                                    "y": -2.9,
+                                    "z": 0.0,
+                                    "yaw": 0.0,
+                                    "pitch": 0.0,
+                                    "roll": 0.0
+                                },
+                                "acceptable_precision": 0.3,
+                                "speed_ratio": 1.0
+                            },
+                            {
+                                "action_type": "wait",
+                                "wait_duration": 10.0
+                            }
+                        ],
+                        "priority": 1
+                    }
+                },
+                {
+                    "summary": "移动到POI并等待",
+                    "description": "使用POI名称导航（需要先查询POI列表：GET /api/maps/pois）。如果POI不存在会失败。",
+                    "value": {
+                        "actions": [
+                            {
+                                "action_type": "move_to",
+                                "poi_name": "PO3",
+                                "acceptable_precision": 0.3,
+                                "speed_ratio": 1.0
+                            },
+                            {
+                                "action_type": "wait",
+                                "wait_duration": 10.0
+                            }
+                        ],
+                        "priority": 1
+                    }
+                },
+                {
+                    "summary": "完整多动作任务：移动到POI -> 等待 -> 移动到另一个POI -> 回桩",
+                    "description": "包含多个动作的完整任务示例：移动到POI、等待、移动到另一个POI、最后回桩。",
+                    "value": {
+                        "actions": [
+                            {
+                                "action_type": "move_to",
+                                "poi_name": "PO7",
+                                "acceptable_precision": 0.3,
+                                "speed_ratio": 1.0
+                            },
+                            {
+                                "action_type": "wait",
+                                "wait_duration": 60.0
+                            },
+                            {
+                                "action_type": "move_to",
+                                "poi_name": "P02",
+                                "acceptable_precision": 0.3,
+                                "speed_ratio": 1.0
+                            },
+                            {
+                                "action_type": "go_home"
+                            }
+                        ],
+                        "priority": 4
+                    }
+                }
+            ]
+        }
+
+
+class TaskCreateResponse(BaseModel):
+    """创建任务响应（简化版，明确返回task_id）"""
+    task_id: str
+    status: TaskStatus
+    created_at: datetime
+    message: str = "Task created successfully"
+    
+    class Config:
+        json_encoders = {
+            datetime: lambda v: v.isoformat()
+        }
 
 
 class Task(BaseModel):
     """任务信息"""
-    task_id: str
+    task_id: str  # 任务ID（必需字段，会在响应中返回）
     robot_id: Optional[str] = None
     status: TaskStatus
     start_pose: Optional[Pose]

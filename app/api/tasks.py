@@ -3,9 +3,10 @@
 """
 import logging
 import math
+import time
 from fastapi import APIRouter, HTTPException, Depends, Query
 from typing import List, Optional, Dict, Any
-from app.models.task import Task, TaskCreate, TaskStatus, MultiActionTaskCreate
+from app.models.task import Task, TaskCreate, TaskStatus, MultiActionTaskCreate, TaskCreateResponse
 from app.services.task_scheduler import TaskScheduler, get_task_scheduler
 from app.services.map_manager import MapManager, get_map_manager
 from app.services.robot_manager import RobotManager, get_robot_manager
@@ -21,10 +22,16 @@ async def create_task(
     map_manager: MapManager = Depends(get_map_manager)
 ):
     """
-    创建任务
+    创建单点任务
+    
+    返回完整的任务信息，包括 task_id、status、created_at 等。
+    使用返回的 task_id 可以查询任务状态：GET /api/tasks/{task_id}
     
     Args:
         task: 任务创建请求
+    
+    Returns:
+        Task: 创建的任务对象，包含 task_id、status、created_at 等字段
     """
     try:
         # 验证地图是否已加载
@@ -51,17 +58,23 @@ async def create_task(
                 )
         
         # 创建任务
-        import time
         api_start_time = time.time()
         created_task = await task_scheduler.create_task(task)
         api_elapsed = time.time() - api_start_time
         logger.info(f"Single-point task created via API: {created_task.task_id}, API elapsed={api_elapsed:.3f}s")
+        
+        # 确保返回的任务包含 task_id
+        if not created_task.task_id:
+            raise HTTPException(status_code=500, detail="Task created but task_id is missing")
+        
+        # 确保 task_id 在响应中（显式验证）
+        logger.debug(f"Returning task with task_id: {created_task.task_id}, status: {created_task.status}")
+        
+        # 返回 Task 对象，FastAPI 会自动序列化为 JSON，包含所有字段包括 task_id
         return created_task
     except HTTPException:
         raise
     except Exception as e:
-        import logging
-        logger = logging.getLogger(__name__)
         logger.error(f"Failed to create task: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to create task: {str(e)}")
 
@@ -374,17 +387,33 @@ async def create_multi_action_task(
     map_manager: MapManager = Depends(get_map_manager)
 ):
     """
-    创建多动作任务（优化：立即返回任务ID，最小化验证）
+    创建多动作任务
     
-    支持的动作类型：
-    - move_to: 移动到目标点（需要target_pose或poi_name）
-    - wait: 等待指定时间（需要wait_duration）
-    - go_home: 回桩
+    返回完整的任务信息，包括 task_id、status、created_at 等。
+    使用返回的 task_id 可以查询任务状态：GET /api/tasks/{task_id}
+    
+    **支持的动作类型：**
+    - **move_to**: 移动到目标点
+      - 方式1（推荐）：使用 `target_pose` 指定坐标，简单可靠
+      - 方式2：使用 `poi_name` 指定POI名称（需要先查询POI：GET /api/maps/pois）
+    - **wait**: 等待指定时间（需要 `wait_duration` > 0，单位：秒）
+    - **go_home**: 回桩（不需要额外参数）
+    
+    **注意事项：**
+    - 如果使用 `poi_name`，请确保POI名称正确（可通过 GET /api/maps/pois 查询）
+    - 如果同时提供 `target_pose` 和 `poi_name`，系统优先使用 `poi_name` 进行POI导航
+    - 建议使用 `target_pose` 进行坐标导航，更简单可靠，不会出现 POI_NOT_FOUND 错误
+    - `priority` 可选，如果不指定则系统自动计算（1-4，1最低，4最高）
+    
+    **示例：**
+    查看下方 "Examples" 下拉菜单，选择不同的示例进行测试。
     
     Args:
         task: 多动作任务创建请求
+    
+    Returns:
+        Task: 创建的任务对象，包含 task_id、status、created_at 等字段
     """
-    import time
     api_start = time.time()
     logger.info(f"API: Received multi-action task creation request with {len(task.actions)} actions")
     
@@ -435,6 +464,15 @@ async def create_multi_action_task(
         created_task = await task_scheduler.create_multi_action_task(task)
         api_elapsed = time.time() - api_start
         logger.info(f"API: Multi-action task created successfully: {created_task.task_id}, {len(task.actions)} actions, elapsed={api_elapsed:.3f}s")
+        
+        # 确保返回的任务包含 task_id
+        if not created_task.task_id:
+            raise HTTPException(status_code=500, detail="Task created but task_id is missing")
+        
+        # 确保 task_id 在响应中（显式验证）
+        logger.debug(f"Returning multi-action task with task_id: {created_task.task_id}, status: {created_task.status}")
+        
+        # 返回 Task 对象，FastAPI 会自动序列化为 JSON，包含所有字段包括 task_id
         return created_task
     except HTTPException:
         raise

@@ -270,7 +270,6 @@ class RobotAgent:
                         f"Robot {self.robot_id} GET {path} server error {e.response.status_code} "
                         f"(attempt {attempt + 1}/{retries + 1}). Will retry..."
                     )
-                    import asyncio
                     await asyncio.sleep(1.0 * (attempt + 1))  # VPN环境：从0.5秒增加到1秒
                     last_exception = e
                     continue
@@ -285,7 +284,6 @@ class RobotAgent:
                         f"Robot {self.robot_id} GET {path} failed (attempt {attempt + 1}/{retries + 1}): {error_details}. "
                         f"Will retry..."
                     )
-                    import asyncio
                     await asyncio.sleep(1.0 * (attempt + 1))  # VPN环境：从0.5秒增加到1秒
                 else:
                     logger.error(f"Robot {self.robot_id} GET {path} failed after {retries + 1} attempts: {error_details}", exc_info=True)
@@ -376,7 +374,6 @@ class RobotAgent:
                 # HTTP状态错误，5xx错误可以重试
                 if e.response.status_code >= 500 and attempt < retries:
                     logger.warning(f"Robot {self.robot_id} POST {path} server error {e.response.status_code} (attempt {attempt + 1}/{retries + 1}). Will retry...")
-                    import asyncio
                     await asyncio.sleep(1.0 * (attempt + 1))  # VPN环境：从0.5秒增加到1秒
                     last_exception = e
                     continue
@@ -407,7 +404,6 @@ class RobotAgent:
                 last_exception = e
                 if attempt < retries:
                     logger.warning(f"Robot {self.robot_id} POST {path} failed (attempt {attempt + 1}/{retries + 1}): {e}. Will retry...")
-                    import asyncio
                     await asyncio.sleep(1.0 * (attempt + 1))  # VPN环境：从0.5秒增加到1秒
                 else:
                     logger.error(f"Robot {self.robot_id} POST {path} failed after {retries + 1} attempts: {e}")

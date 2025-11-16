@@ -6,6 +6,7 @@ import asyncio
 import logging
 import math
 import json
+import time
 from pathlib import Path
 from typing import List, Optional, Dict
 from datetime import datetime
@@ -162,7 +163,6 @@ class TaskScheduler:
     
     def _load_tasks_from_file(self):
         """从文件加载已保存的任务"""
-        import time
         load_start = time.time()
         try:
             if not self.STORAGE_FILE.exists():
@@ -263,6 +263,7 @@ class TaskScheduler:
         Returns:
             创建的任务
         """
+        start_time = time.time()
         # 自动计算优先级（如果用户没有指定）
         if task_create.priority is None:
             # 如果没有起点，尝试使用最近的空闲机器人位置来估算

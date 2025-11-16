@@ -1,106 +1,136 @@
-﻿# 重启服务脚本
-# 用于在 Windows PowerShell 中重启 FastAPI 服务
+﻿# Restart Service Script
+# Used to quickly restart the robot scheduling system service
 
 param(
-    [string]$Port = "8000"
+    [switch]$Force = $false,
+    [switch]$Background = $false
 )
 
-# 创建分隔线
-$separator = -join (1..80 | ForEach-Object { '=' })
-Write-Host $separator
-Write-Host "重启机器人调度系统服务" -ForegroundColor Cyan
-Write-Host $separator
+Write-Host "========================================" -ForegroundColor Cyan
+Write-Host "  Restart Robot Scheduling Service" -ForegroundColor Cyan
+Write-Host "========================================" -ForegroundColor Cyan
 Write-Host ""
 
-# 1. 查找并停止运行在指定端口的进程
-Write-Host "[1/3] 查找运行在端口 $Port 的进程..." -ForegroundColor Yellow
-$processes = Get-NetTCPConnection -LocalPort $Port -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique
-
-if ($processes) {
-    Write-Host "找到进程: $($processes -join ', ')" -ForegroundColor Green
-    foreach ($processId in $processes) {
-        try {
-            $proc = Get-Process -Id $processId -ErrorAction SilentlyContinue
-            if ($null -ne $proc) {
-                Write-Host "  停止进程 PID: $processId ($($proc.ProcessName))" -ForegroundColor Yellow
-                Stop-Process -Id $processId -Force -ErrorAction SilentlyContinue
-                Start-Sleep -Seconds 1
-            }
-        } catch {
-            Write-Host "  无法停止进程 PID: $processId - $_" -ForegroundColor Red
-        }
-    }
-    Write-Host "已停止所有相关进程" -ForegroundColor Green
-} else {
-    Write-Host "未找到运行在端口 $Port 的进程" -ForegroundColor Yellow
-}
-
+# Step 1: Stop existing service
+Write-Host "[1/2] Stopping existing service..." -ForegroundColor Yellow
 Write-Host ""
 
-# 2. 等待端口释放
-Write-Host "[2/3] 等待端口 $Port 释放..." -ForegroundColor Yellow
-$maxWait = 10
-$waited = 0
-while ($waited -lt $maxWait) {
-    $connection = Get-NetTCPConnection -LocalPort $Port -ErrorAction SilentlyContinue
-    if (-not $connection) {
-        Write-Host "端口 $Port 已释放" -ForegroundColor Green
-        break
-    }
-    Start-Sleep -Seconds 1
-    $waited++
-    Write-Host "  等待中... ($waited/$maxWait 秒)" -ForegroundColor Gray
-}
+# Find processes running on port 8000
+$procs = Get-NetTCPConnection -LocalPort 8000 -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique
 
-Write-Host ""
-
-# 3. 启动服务
-Write-Host "[3/3] 启动服务..." -ForegroundColor Yellow
-Write-Host "正在启动 FastAPI 服务..." -ForegroundColor Cyan
-
-# 检查虚拟环境并确定 Python 路径
-$pythonPath = "python"
-$venvScripts = ".\venv\Scripts\python.exe"
-$venvBin = ".\venv\bin\python.exe"
-
-if (Test-Path $venvScripts) {
-    $pythonPath = $venvScripts
-    Write-Host "检测到虚拟环境 (Scripts)，使用: $pythonPath" -ForegroundColor Green
-} elseif (Test-Path $venvBin) {
-    $pythonPath = $venvBin
-    Write-Host "检测到虚拟环境 (bin)，使用: $pythonPath" -ForegroundColor Green
-} else {
-    Write-Host "未找到虚拟环境，使用系统 Python" -ForegroundColor Yellow
-}
-
-# 启动服务（后台运行）
-$process = Start-Process $pythonPath -ArgumentList "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", $Port, "--reload" -PassThru -NoNewWindow
-
-if ($null -ne $process) {
-    Write-Host "服务已启动，PID: $($process.Id)" -ForegroundColor Green
-    Write-Host ""
-    Write-Host "服务地址: http://localhost:$Port" -ForegroundColor Cyan
-    Write-Host "API 文档: http://localhost:$Port/docs" -ForegroundColor Cyan
-    Write-Host ""
-    Write-Host "按 Ctrl+C 停止服务" -ForegroundColor Yellow
-    Write-Host ""
+if ($procs) {
+    Write-Host "Found running service processes: $($procs -join ', ')" -ForegroundColor Cyan
     
-    # 等待几秒检查服务是否正常启动
-    Start-Sleep -Seconds 3
-    try {
-        $response = Invoke-WebRequest -Uri "http://localhost:$Port/health" -TimeoutSec 2 -ErrorAction Stop
-        if ($response.StatusCode -eq 200) {
-            Write-Host "[OK] 服务健康检查通过" -ForegroundColor Green
+    # Stop processes
+    $stoppedCount = 0
+    foreach ($procId in $procs) {
+        try {
+            Stop-Process -Id $procId -Force -ErrorAction Stop
+            Write-Host "[OK] Stopped process $procId" -ForegroundColor Green
+            $stoppedCount++
+        } catch {
+            Write-Host "[ERROR] Failed to stop process $procId : $_" -ForegroundColor Red
         }
-    } catch {
-        Write-Host "[WARN] 服务可能还在启动中，请稍后检查" -ForegroundColor Yellow
     }
+    
+    # Wait for processes to fully exit
+    Write-Host "Waiting for processes to fully exit..." -ForegroundColor Yellow
+    Start-Sleep -Seconds 2
+    
+    # Verify if stopped
+    $remainingProcs = Get-NetTCPConnection -LocalPort 8000 -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique
+    if ($remainingProcs) {
+        Write-Host "[WARN] There are still processes using port 8000, trying to force stop..." -ForegroundColor Yellow
+        foreach ($procId in $remainingProcs) {
+            try {
+                Stop-Process -Id $procId -Force -ErrorAction Stop
+                Start-Sleep -Seconds 1
+            } catch {
+                Write-Host "[ERROR] Failed to force stop process $procId : $_" -ForegroundColor Red
+            }
+        }
+    }
+    
+    Write-Host "[OK] Stopped $stoppedCount processes" -ForegroundColor Green
 } else {
-    Write-Host "[FAIL] 启动服务失败" -ForegroundColor Red
+    Write-Host "[OK] Service is not running, no need to stop" -ForegroundColor Green
+}
+
+Write-Host ""
+
+# Step 2: Start new service
+Write-Host "[2/2] Starting new service..." -ForegroundColor Yellow
+Write-Host ""
+
+# Check virtual environment
+$pythonPath = $null
+if (Test-Path "venv\Scripts\python.exe") {
+    $pythonPath = "venv\Scripts\python.exe"
+    Write-Host "[OK] Using virtual environment: venv\Scripts\python.exe" -ForegroundColor Green
+} elseif (Test-Path "venv\bin\python.exe") {
+    $pythonPath = "venv\bin\python.exe"
+    Write-Host "[OK] Using virtual environment: venv\bin\python.exe" -ForegroundColor Green
+} else {
+    $pythonPath = "python"
+    Write-Host "[WARN] Virtual environment not found, using system Python" -ForegroundColor Yellow
+}
+
+# Check if main.py exists
+if (-not (Test-Path "main.py")) {
+    Write-Host "[ERROR] main.py file not found" -ForegroundColor Red
+    Write-Host "   Please make sure you are running this script from the project root directory" -ForegroundColor Red
+    exit 1
+}
+
+# Start service
+try {
+    if ($Background) {
+        # Run in background (no window)
+        $process = Start-Process -FilePath $pythonPath -ArgumentList "main.py" -WindowStyle Hidden -PassThru
+        Write-Host "[OK] Service started in background (Process ID: $($process.Id))" -ForegroundColor Green
+    } else {
+        # Run in foreground (show window)
+        $process = Start-Process -FilePath $pythonPath -ArgumentList "main.py" -PassThru
+        Write-Host "[OK] Service started (Process ID: $($process.Id))" -ForegroundColor Green
+    }
+    
+    # Wait for service to start
+    Write-Host "Waiting for service to initialize..." -ForegroundColor Yellow
+    Start-Sleep -Seconds 3
+    
+    # Check if service started successfully
+    $checkProcs = Get-NetTCPConnection -LocalPort 8000 -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique
+    if ($checkProcs) {
+        Write-Host ""
+        Write-Host "========================================" -ForegroundColor Green
+        Write-Host "  Service restarted successfully!" -ForegroundColor Green
+        Write-Host "========================================" -ForegroundColor Green
+        Write-Host ""
+        Write-Host "  Process ID: $($checkProcs -join ', ')" -ForegroundColor Cyan
+        Write-Host "  Service URL: http://localhost:8000" -ForegroundColor Cyan
+        Write-Host "  API Docs: http://localhost:8000/docs" -ForegroundColor Cyan
+        Write-Host "  Homepage: http://localhost:8000/" -ForegroundColor Cyan
+        Write-Host ""
+        
+        # Try to check service health
+        try {
+            $response = Invoke-RestMethod -Uri "http://localhost:8000/api/health" -TimeoutSec 2 -ErrorAction SilentlyContinue
+            Write-Host "[OK] Service health check: OK" -ForegroundColor Green
+        } catch {
+            Write-Host "[WARN] Service health check: Not responding (may still be starting)" -ForegroundColor Yellow
+        }
+    } else {
+        Write-Host ""
+        Write-Host "[WARN] Service process started but port 8000 is not listening yet" -ForegroundColor Yellow
+        Write-Host "   Please wait a moment, or check the log file logs\app.log" -ForegroundColor Yellow
+    }
+} catch {
+    Write-Host ""
+    Write-Host "[ERROR] Failed to start service" -ForegroundColor Red
+    Write-Host "   Error: $_" -ForegroundColor Red
     exit 1
 }
 
 Write-Host ""
-Write-Host $separator
-Write-Host "服务重启完成！" -ForegroundColor Green
-Write-Host $separator
+Write-Host "Tip: Use stop_service.ps1 to stop the service" -ForegroundColor Gray
+Write-Host "     Use start_service.ps1 to start the service" -ForegroundColor Gray
