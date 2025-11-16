@@ -3,6 +3,8 @@
 """
 import math
 import logging
+import os
+from logging.handlers import RotatingFileHandler
 from typing import List, Dict, Set, Tuple, Optional, Any
 from datetime import datetime, timedelta
 from app.models.robot import Pose, Speed
@@ -12,6 +14,33 @@ from app.services.path_planner import PathPlanner
 
 logger = logging.getLogger(__name__)
 
+# 创建专门的死锁日志记录器
+deadlock_logger = logging.getLogger("deadlock")
+deadlock_logger.setLevel(logging.INFO)
+# 避免重复添加handler
+if not deadlock_logger.handlers:
+    log_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "logs")
+    os.makedirs(log_dir, exist_ok=True)
+    deadlock_log_file = os.path.join(log_dir, "deadlock.log")
+    
+    # 死锁日志文件处理器 - 使用轮转，每个文件最大10MB，保留5个备份
+    deadlock_file_handler = RotatingFileHandler(
+        deadlock_log_file,
+        maxBytes=10 * 1024 * 1024,  # 10MB
+        backupCount=5,
+        encoding='utf-8'
+    )
+    deadlock_file_handler.setLevel(logging.INFO)
+    deadlock_file_handler.setFormatter(logging.Formatter(
+        '%(asctime)s - %(levelname)s - %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    ))
+    deadlock_logger.addHandler(deadlock_file_handler)
+    deadlock_logger.info("=" * 80)
+    deadlock_logger.info("Deadlock detection logger initialized")
+    deadlock_logger.info(f"Deadlock log file: {deadlock_log_file}")
+    deadlock_logger.info("=" * 80)
+
 
 class DeadlockState:
     """死锁状态"""
@@ -19,14 +48,16 @@ class DeadlockState:
     def __init__(
         self,
         robot_ids: List[str],
-        deadlock_type: str,  # "circular_wait", "mutual_blocking", "resource_contention"
+        deadlock_type: str,  # "circular_wait", "mutual_blocking", "resource_contention", "narrow_passage", "livelock", "starvation"
         start_time: datetime,
-        duration: float = 0.0
+        duration: float = 0.0,
+        additional_info: Optional[Dict[str, Any]] = None
     ):
         self.robot_ids = robot_ids
         self.deadlock_type = deadlock_type
         self.start_time = start_time
         self.duration = duration  # 死锁持续时间（秒）
+        self.additional_info = additional_info or {}  # 额外信息（如任务ID、等待时间等）
 
 
 class DeadlockDetector:
@@ -84,6 +115,13 @@ class DeadlockDetector:
             self.history_retention_time = config.get("history_retention_time", 60.0)
             self.waiting_point_min_distance = config.get("waiting_point_min_distance", 2.0)  # 等待点最小距离
             self.waiting_point_max_distance = config.get("waiting_point_max_distance", 5.0)  # 等待点最大距离
+            # 活锁检测配置
+            self.livelock_threshold = config.get("livelock_threshold", 15.0)  # 活锁检测阈值（秒）
+            self.livelock_progress_threshold = config.get("livelock_progress_threshold", 0.5)  # 活锁进度阈值（米）
+            self.livelock_oscillation_threshold = config.get("livelock_oscillation_threshold", 1.0)  # 活锁振荡阈值（米）
+            # 饥饿死锁检测配置
+            self.starvation_threshold = config.get("starvation_threshold", 60.0)  # 饥饿死锁阈值（秒）- 任务等待时间
+            self.starvation_deadlock_threshold = config.get("starvation_deadlock_threshold", 120.0)  # 饥饿死锁触发阈值（秒）
         except Exception as e:
             logger.warning(f"Failed to load config, using defaults: {e}")
             # 使用默认值
@@ -105,6 +143,13 @@ class DeadlockDetector:
             self.history_retention_time = 60.0
             self.waiting_point_min_distance = 2.0
             self.waiting_point_max_distance = 5.0
+            # 活锁检测配置（默认值）
+            self.livelock_threshold = 15.0
+            self.livelock_progress_threshold = 0.5
+            self.livelock_oscillation_threshold = 1.0
+            # 饥饿死锁检测配置（默认值）
+            self.starvation_threshold = 60.0
+            self.starvation_deadlock_threshold = 120.0
     
     def calculate_distance(self, pose1: Pose, pose2: Pose) -> float:
         """计算两点之间的距离"""
@@ -164,6 +209,159 @@ class DeadlockDetector:
         
         # 如果最大移动距离小于阈值，认为卡住
         return max_distance < self.robot_stuck_threshold
+    
+    async def detect_livelock(self, robot_ids: List[str]) -> Optional[List[str]]:
+        """
+        检测活锁（机器人不断移动但无法前进）
+        
+        Args:
+            robot_ids: 机器人ID列表
+            
+        Returns:
+            活锁的机器人ID列表，如果没有则返回None
+        """
+        if len(robot_ids) < 1 or not self.task_scheduler:
+            return None
+        
+        self._load_config()
+        livelock_robots = []
+        
+        for robot_id in robot_ids:
+            if robot_id not in self.robot_states_history:
+                continue
+            
+            history = self.robot_states_history[robot_id]
+            if len(history) < 10:  # 需要足够的历史数据
+                continue
+            
+            # 检查最近时间窗口内的位置变化
+            now = datetime.now()
+            cutoff_time = now - timedelta(seconds=self.livelock_threshold)
+            recent_history = [(t, p) for t, p in history if t > cutoff_time]
+            
+            if len(recent_history) < 5:
+                continue
+            
+            positions = [p for _, p in recent_history]
+            
+            # 1. 检查是否在振荡（来回移动）
+            oscillation_detected = False
+            if len(positions) >= 6:
+                # 检查位置是否在小范围内振荡
+                center_x = sum(p.x for p in positions) / len(positions)
+                center_y = sum(p.y for p in positions) / len(positions)
+                max_distance_from_center = 0.0
+                
+                for p in positions:
+                    distance = math.sqrt((p.x - center_x)**2 + (p.y - center_y)**2)
+                    max_distance_from_center = max(max_distance_from_center, distance)
+                
+                # 如果最大距离小于振荡阈值，且总移动距离较大，可能是振荡
+                total_distance = 0.0
+                for i in range(len(positions) - 1):
+                    total_distance += self.calculate_distance(positions[i], positions[i+1])
+                
+                if max_distance_from_center < self.livelock_oscillation_threshold and total_distance > 2.0:
+                    oscillation_detected = True
+            
+            # 2. 检查是否在目标方向上有进展
+            progress_made = False
+            task = None
+            target_pose = None
+            
+            # 获取机器人的当前任务
+            for t in self.task_scheduler.tasks.values():
+                if t.robot_id == robot_id and t.status.value in ["EXECUTING", "ASSIGNED"]:
+                    task = t
+                    if t.target_pose:
+                        target_pose = t.target_pose
+                    elif t.is_multi_action and t.actions and t.current_action_index is not None:
+                        # 对于多动作任务，检查当前动作的目标
+                        current_action = t.actions[t.current_action_index]
+                        if current_action.get("target_pose"):
+                            from app.models.robot import Pose as PoseModel
+                            tp = current_action["target_pose"]
+                            target_pose = PoseModel(x=tp.get("x", 0), y=tp.get("y", 0), yaw=tp.get("yaw", 0))
+                    break
+            
+            if target_pose and len(positions) >= 2:
+                # 计算到目标的距离变化
+                initial_distance = self.calculate_distance(positions[0], target_pose)
+                final_distance = self.calculate_distance(positions[-1], target_pose)
+                distance_improvement = initial_distance - final_distance
+                
+                # 如果距离改善小于阈值，认为没有进展
+                if distance_improvement < self.livelock_progress_threshold:
+                    progress_made = False
+                else:
+                    progress_made = True
+            
+            # 3. 检查总移动距离
+            total_distance = 0.0
+            for i in range(len(positions) - 1):
+                total_distance += self.calculate_distance(positions[i], positions[i+1])
+            
+            # 如果机器人移动了很长距离，但在目标方向上没有进展，或者在小范围内振荡，认为是活锁
+            if (oscillation_detected or (total_distance > 3.0 and not progress_made)) and task:
+                livelock_robots.append(robot_id)
+                deadlock_logger.warning(
+                    f"Livelock detected for robot {robot_id}: "
+                    f"oscillation={oscillation_detected}, progress={progress_made}, "
+                    f"total_distance={total_distance:.2f}m, task_id={task.task_id}"
+                )
+        
+        return livelock_robots if len(livelock_robots) > 0 else None
+    
+    async def detect_starvation(self, robot_ids: Optional[List[str]] = None) -> Optional[List[str]]:
+        """
+        检测饥饿死锁（任务等待时间过长）
+        
+        Args:
+            robot_ids: 机器人ID列表（可选，None表示检测所有机器人）
+            
+        Returns:
+            饥饿的机器人ID列表，如果没有则返回None
+        """
+        if not self.task_scheduler:
+            return None
+        
+        self._load_config()
+        starved_robots = []
+        now = datetime.now()
+        
+        # 检查所有待分配的任务
+        for task in self.task_scheduler.tasks.values():
+            if task.status.value != "PENDING":
+                continue
+            
+            # 计算任务等待时间
+            if task.created_at:
+                wait_time = (now - task.created_at).total_seconds()
+                
+                if wait_time > self.starvation_threshold:
+                    # 检查是否有可用的机器人
+                    available_robots = []
+                    for robot_id in (robot_ids or self.robot_manager.list_robots()):
+                        state = await self.robot_manager.get_robot_state(robot_id)
+                        if state and state.status.value in ["idle", "online"]:
+                            # 检查是否有正在执行的任务
+                            has_executing_task = any(
+                                t.robot_id == robot_id and t.status.value in ["EXECUTING", "ASSIGNED"]
+                                for t in self.task_scheduler.tasks.values()
+                            )
+                            if not has_executing_task:
+                                available_robots.append(robot_id)
+                    
+                    # 如果有可用机器人但任务仍未分配，可能是饥饿死锁
+                    if len(available_robots) > 0 and wait_time > self.starvation_deadlock_threshold:
+                        # 找到应该分配但未分配的机器人（可能是调度器问题）
+                        starved_robots.extend(available_robots[:1])  # 只添加一个机器人作为代表
+                        deadlock_logger.warning(
+                            f"Starvation detected: Task {task.task_id} waiting for {wait_time:.1f}s, "
+                            f"available robots: {available_robots}, priority={task.priority}"
+                        )
+        
+        return starved_robots if len(starved_robots) > 0 else None
     
     async def detect_circular_wait(self, robot_ids: List[str]) -> Optional[List[str]]:
         """
@@ -611,8 +809,11 @@ class DeadlockDetector:
                 self.deadlock_history.append(deadlock)
                 deadlocks.append(deadlock)
                 logger.warning(f"Circular wait deadlock detected: {circular_wait}")
+                deadlock_logger.warning(
+                    f"[CIRCULAR_WAIT] Detected for robots: {', '.join(circular_wait)}"
+                )
         
-        # 检测窄道死锁
+        # 检测窄道死锁（包括十字路口和长走廊场景）
         narrow_passage_deadlock = await self.detect_narrow_passage_deadlock(robot_ids)
         if narrow_passage_deadlock:
             # 检查是否已经记录了死锁
@@ -636,6 +837,9 @@ class DeadlockDetector:
                 self.deadlock_history.append(deadlock)
                 deadlocks.append(deadlock)
                 logger.warning(f"Narrow passage deadlock detected: {narrow_passage_deadlock}")
+                deadlock_logger.warning(
+                    f"[NARROW_PASSAGE] Detected for robots: {', '.join(narrow_passage_deadlock)}"
+                )
         
         # 检测相互阻塞
         mutual_blocking = await self.detect_mutual_blocking(robot_ids)
@@ -661,6 +865,65 @@ class DeadlockDetector:
                 self.deadlock_history.append(deadlock)
                 deadlocks.append(deadlock)
                 logger.warning(f"Mutual blocking deadlock detected: {mutual_blocking}")
+                deadlock_logger.warning(
+                    f"[MUTUAL_BLOCKING] Detected for robots: {', '.join(mutual_blocking)}"
+                )
+        
+        # 检测活锁（机器人不断移动但无法前进）
+        livelock_robots = await self.detect_livelock(robot_ids)
+        if livelock_robots:
+            # 检查是否已经记录了死锁
+            existing_deadlock = None
+            for deadlock in self.deadlock_history:
+                if (deadlock.deadlock_type == "livelock" and
+                    set(deadlock.robot_ids) == set(livelock_robots)):
+                    existing_deadlock = deadlock
+                    break
+            
+            if existing_deadlock:
+                # 更新持续时间
+                existing_deadlock.duration = (datetime.now() - existing_deadlock.start_time).total_seconds()
+            else:
+                # 创建新的死锁记录
+                deadlock = DeadlockState(
+                    robot_ids=livelock_robots,
+                    deadlock_type="livelock",
+                    start_time=datetime.now()
+                )
+                self.deadlock_history.append(deadlock)
+                deadlocks.append(deadlock)
+                logger.warning(f"Livelock detected: {livelock_robots}")
+                deadlock_logger.warning(
+                    f"[LIVELOCK] Detected for robots: {', '.join(livelock_robots)}"
+                )
+        
+        # 检测饥饿死锁（任务等待时间过长）
+        starved_robots = await self.detect_starvation(robot_ids)
+        if starved_robots:
+            # 检查是否已经记录了死锁
+            existing_deadlock = None
+            for deadlock in self.deadlock_history:
+                if (deadlock.deadlock_type == "starvation" and
+                    set(deadlock.robot_ids) == set(starved_robots)):
+                    existing_deadlock = deadlock
+                    break
+            
+            if existing_deadlock:
+                # 更新持续时间
+                existing_deadlock.duration = (datetime.now() - existing_deadlock.start_time).total_seconds()
+            else:
+                # 创建新的死锁记录
+                deadlock = DeadlockState(
+                    robot_ids=starved_robots,
+                    deadlock_type="starvation",
+                    start_time=datetime.now()
+                )
+                self.deadlock_history.append(deadlock)
+                deadlocks.append(deadlock)
+                logger.warning(f"Starvation deadlock detected: {starved_robots}")
+                deadlock_logger.warning(
+                    f"[STARVATION] Detected for robots: {', '.join(starved_robots)}"
+                )
         
         # 检测卡住的机器人
         stuck_robots = []
@@ -690,6 +953,9 @@ class DeadlockDetector:
                 self.deadlock_history.append(deadlock)
                 deadlocks.append(deadlock)
                 logger.warning(f"Resource contention deadlock detected: {stuck_robots}")
+                deadlock_logger.warning(
+                    f"[RESOURCE_CONTENTION] Detected for robots: {', '.join(stuck_robots)}"
+                )
         
         # 清理过期的死锁记录
         self._load_config()  # 重新加载配置
@@ -714,22 +980,68 @@ class DeadlockDetector:
         if len(deadlock.robot_ids) == 0:
             return False
         
+        deadlock_logger.info(
+            f"[RESOLVE] Starting resolution for {deadlock.deadlock_type} deadlock "
+            f"involving robots: {', '.join(deadlock.robot_ids)}, duration: {deadlock.duration:.1f}s"
+        )
+        
         # 根据死锁类型采用不同策略
         if deadlock.deadlock_type == "narrow_passage":
             # 窄道死锁：让优先级低的机器人后退
-            return await self._resolve_narrow_passage_deadlock(deadlock)
+            result = await self._resolve_narrow_passage_deadlock(deadlock)
+            if result:
+                deadlock_logger.info(f"[RESOLVE] Narrow passage deadlock resolved successfully")
+            else:
+                deadlock_logger.error(f"[RESOLVE] Failed to resolve narrow passage deadlock")
+            return result
         elif deadlock.deadlock_type == "circular_wait":
             # 循环等待：打破循环，让一个机器人后退
-            return await self._resolve_circular_wait_deadlock(deadlock)
+            result = await self._resolve_circular_wait_deadlock(deadlock)
+            if result:
+                deadlock_logger.info(f"[RESOLVE] Circular wait deadlock resolved successfully")
+            else:
+                deadlock_logger.error(f"[RESOLVE] Failed to resolve circular wait deadlock")
+            return result
         elif deadlock.deadlock_type == "mutual_blocking":
             # 相互阻塞：让一个机器人后退
-            return await self._resolve_mutual_blocking_deadlock(deadlock)
+            result = await self._resolve_mutual_blocking_deadlock(deadlock)
+            if result:
+                deadlock_logger.info(f"[RESOLVE] Mutual blocking deadlock resolved successfully")
+            else:
+                deadlock_logger.error(f"[RESOLVE] Failed to resolve mutual blocking deadlock")
+            return result
         elif deadlock.deadlock_type == "resource_contention":
             # 资源竞争（单个机器人卡住）：尝试重新发送任务指令或移动到避让点
-            return await self._resolve_resource_contention_deadlock(deadlock)
+            result = await self._resolve_resource_contention_deadlock(deadlock)
+            if result:
+                deadlock_logger.info(f"[RESOLVE] Resource contention deadlock resolved successfully")
+            else:
+                deadlock_logger.error(f"[RESOLVE] Failed to resolve resource contention deadlock")
+            return result
+        elif deadlock.deadlock_type == "livelock":
+            # 活锁：让机器人后退或重新规划路径
+            result = await self._resolve_livelock_deadlock(deadlock)
+            if result:
+                deadlock_logger.info(f"[RESOLVE] Livelock resolved successfully")
+            else:
+                deadlock_logger.error(f"[RESOLVE] Failed to resolve livelock")
+            return result
+        elif deadlock.deadlock_type == "starvation":
+            # 饥饿死锁：强制分配任务或提高优先级
+            result = await self._resolve_starvation_deadlock(deadlock)
+            if result:
+                deadlock_logger.info(f"[RESOLVE] Starvation deadlock resolved successfully")
+            else:
+                deadlock_logger.error(f"[RESOLVE] Failed to resolve starvation deadlock")
+            return result
         else:
             # 其他类型：使用默认策略
-            return await self._resolve_default_deadlock(deadlock)
+            result = await self._resolve_default_deadlock(deadlock)
+            if result:
+                deadlock_logger.info(f"[RESOLVE] Default deadlock resolved successfully")
+            else:
+                deadlock_logger.error(f"[RESOLVE] Failed to resolve default deadlock")
+            return result
     
     def _get_robot_task_priority(self, robot_id: str) -> int:
         """
@@ -776,16 +1088,30 @@ class DeadlockDetector:
         self._load_config()
         
         # 计算需要让行的机器人数量
-        # 策略：如果死锁涉及3台或更多机器人，让多个低优先级机器人后退
+        # 策略：根据机器人数量动态调整让行数量，支持4-8台机器人场景
         num_robots = len(robot_priorities)
         num_to_resolve = 1  # 默认只让1台机器人后退
         
-        if num_robots >= 3:
-            # 如果3台或更多机器人，让一半（向下取整）的低优先级机器人后退
-            num_to_resolve = max(1, num_robots // 2)
+        if num_robots >= 6:
+            # 6台或更多机器人：让1/3的低优先级机器人后退（向上取整）
+            num_to_resolve = max(2, (num_robots + 2) // 3)
             logger.info(
-                f"Multiple robots ({num_robots}) in deadlock, resolving {num_to_resolve} "
-                f"lowest priority robots"
+                f"Large group deadlock ({num_robots} robots), resolving {num_to_resolve} "
+                f"lowest priority robots (1/3 of total)"
+            )
+        elif num_robots >= 4:
+            # 4-5台机器人：让一半的低优先级机器人后退
+            num_to_resolve = max(2, num_robots // 2)
+            logger.info(
+                f"Medium group deadlock ({num_robots} robots), resolving {num_to_resolve} "
+                f"lowest priority robots (1/2 of total)"
+            )
+        elif num_robots >= 3:
+            # 3台机器人：让1台低优先级机器人后退
+            num_to_resolve = 1
+            logger.info(
+                f"Small group deadlock ({num_robots} robots), resolving {num_to_resolve} "
+                f"lowest priority robot"
             )
         
         # 计算所有机器人的中心位置（用于确定窄道位置）
@@ -902,56 +1228,96 @@ class DeadlockDetector:
         return False
     
     async def _resolve_circular_wait_deadlock(self, deadlock: DeadlockState) -> bool:
-        """解决循环等待死锁：使用实际任务优先级"""
-        # 获取每个机器人对应的任务优先级，选择优先级最低的
+        """解决循环等待死锁：使用实际任务优先级，支持多台机器人场景"""
+        # 获取每个机器人对应的任务优先级
         robot_priorities = []
+        robot_states = {}
         for robot_id in deadlock.robot_ids:
-            priority_value = self._get_robot_task_priority(robot_id)
-            robot_priorities.append((robot_id, priority_value))
+            state = await self.robot_manager.get_robot_state(robot_id)
+            if state:
+                robot_states[robot_id] = state
+                priority_value = self._get_robot_task_priority(robot_id)
+                robot_priorities.append((robot_id, priority_value))
         
         if not robot_priorities:
             return False
         
-        # 选择优先级最低的机器人
+        # 按优先级排序（优先级值越小，优先级越低）
         robot_priorities.sort(key=lambda x: x[1])
-        robot_id_to_resolve = robot_priorities[0][0]
-        priority_value = robot_priorities[0][1]
         
-        agent = self.robot_manager.get_robot_agent(robot_id_to_resolve)
-        if not agent:
-            return False
+        # 计算需要让行的机器人数量（支持4-8台机器人场景）
+        num_robots = len(robot_priorities)
+        num_to_resolve = 1  # 默认只让1台机器人后退
         
-        try:
-            state = await self.robot_manager.get_robot_state(robot_id_to_resolve)
-            if not state:
-                return False
-            
-            # 重新加载配置
-            self._load_config()
-            # 后退
-            back_distance = self.circular_wait_backoff_distance
-            back_x = state.pose.x - math.cos(state.pose.yaw) * back_distance
-            back_y = state.pose.y - math.sin(state.pose.yaw) * back_distance
-            back_pose = Pose(
-                x=back_x,
-                y=back_y,
-                z=state.pose.z,
-                yaw=state.pose.yaw
+        if num_robots >= 6:
+            # 6台或更多机器人：让1/3的低优先级机器人后退
+            num_to_resolve = max(2, (num_robots + 2) // 3)
+            logger.info(
+                f"Large circular wait deadlock ({num_robots} robots), resolving {num_to_resolve} "
+                f"lowest priority robots"
             )
+        elif num_robots >= 4:
+            # 4-5台机器人：让一半的低优先级机器人后退
+            num_to_resolve = max(2, num_robots // 2)
+            logger.info(
+                f"Medium circular wait deadlock ({num_robots} robots), resolving {num_to_resolve} "
+                f"lowest priority robots"
+            )
+        else:
+            # 2-3台机器人：让1台低优先级机器人后退
+            num_to_resolve = 1
+        
+        # 重新加载配置
+        self._load_config()
+        
+        # 让多个低优先级机器人后退
+        success_count = 0
+        for i in range(min(num_to_resolve, len(robot_priorities))):
+            robot_id_to_resolve, priority_value = robot_priorities[i]
             
-            await agent.move_to(back_pose, mode=0, acceptable_precision=self.backoff_acceptable_precision, speed_ratio=self.backoff_speed_ratio)
-            logger.info(f"Resolved circular wait deadlock: robot {robot_id_to_resolve} (priority={priority_value}) backing up")
+            agent = self.robot_manager.get_robot_agent(robot_id_to_resolve)
+            if not agent:
+                continue
             
+            try:
+                state = robot_states[robot_id_to_resolve]
+                if not state:
+                    continue
+                
+                # 后退
+                back_distance = self.circular_wait_backoff_distance
+                back_x = state.pose.x - math.cos(state.pose.yaw) * back_distance
+                back_y = state.pose.y - math.sin(state.pose.yaw) * back_distance
+                back_pose = Pose(
+                    x=back_x,
+                    y=back_y,
+                    z=state.pose.z,
+                    yaw=state.pose.yaw
+                )
+                
+                await agent.move_to(back_pose, mode=0, acceptable_precision=self.backoff_acceptable_precision, speed_ratio=self.backoff_speed_ratio)
+                logger.info(
+                    f"Resolved circular wait deadlock: robot {robot_id_to_resolve} "
+                    f"(priority={priority_value}) backing up {back_distance}m"
+                )
+                success_count += 1
+                
+            except Exception as e:
+                logger.error(f"Failed to resolve circular wait deadlock for robot {robot_id_to_resolve}: {e}")
+                continue
+        
+        # 如果至少有一个机器人成功后退，认为死锁已解决
+        if success_count > 0:
             self.deadlock_history = [
                 d for d in self.deadlock_history
                 if d != deadlock
             ]
-            
+            logger.info(
+                f"✓ Circular wait deadlock resolved: {success_count}/{num_to_resolve} robots moved"
+            )
             return True
-            
-        except Exception as e:
-            logger.error(f"Failed to resolve circular wait deadlock for robot {robot_id_to_resolve}: {e}")
-            return False
+        
+        return False
     
     async def _resolve_mutual_blocking_deadlock(self, deadlock: DeadlockState) -> bool:
         """解决相互阻塞死锁：优先使用任务优先级，其次考虑距离"""
@@ -1022,64 +1388,99 @@ class DeadlockDetector:
         # 4. 剩余动作最多的（如果前面都相同）
         # 5. 机器人ID（确保确定性）
         robot_info.sort(key=lambda x: (x[1], x[2], x[3], x[4], x[5]))
-        robot_id_to_resolve = robot_info[0][0]
-        priority_value = robot_info[0][1]
-        avg_distance = robot_info[0][2]
-        execution_time = robot_info[0][3]
-        remaining_actions = -robot_info[0][4]  # 恢复正值
         
-        logger.info(
-            f"Selected robot {robot_id_to_resolve} to resolve mutual blocking deadlock "
-            f"(priority={priority_value}, avg_distance={avg_distance:.2f}m, "
-            f"execution_time={execution_time:.1f}s, remaining_actions={remaining_actions})"
-        )
+        # 计算需要让行的机器人数量（支持4-8台机器人场景）
+        num_robots = len(robot_info)
+        num_to_resolve = 1  # 默认只让1台机器人后退
         
-        agent = self.robot_manager.get_robot_agent(robot_id_to_resolve)
-        if not agent:
-            logger.error(f"Robot agent not found for {robot_id_to_resolve}")
-            return False
-        
-        try:
-            state = await self.robot_manager.get_robot_state(robot_id_to_resolve)
-            if not state:
-                logger.error(f"Could not get state for robot {robot_id_to_resolve} before resolving")
-                return False
-            
-            # 重新加载配置
-            self._load_config()
-            # 后退
-            back_distance = self.mutual_blocking_backoff_distance
-            logger.info(f"Moving robot {robot_id_to_resolve} back {back_distance}m to resolve deadlock")
-            back_x = state.pose.x - math.cos(state.pose.yaw) * back_distance
-            back_y = state.pose.y - math.sin(state.pose.yaw) * back_distance
-            back_pose = Pose(
-                x=back_x,
-                y=back_y,
-                z=state.pose.z,
-                yaw=state.pose.yaw
-            )
-            
-            await agent.move_to(back_pose, mode=0, acceptable_precision=self.backoff_acceptable_precision, speed_ratio=self.backoff_speed_ratio)
+        if num_robots >= 6:
+            # 6台或更多机器人：让1/3的低优先级机器人后退
+            num_to_resolve = max(2, (num_robots + 2) // 3)
             logger.info(
-                f"✓ Successfully moved robot {robot_id_to_resolve} (priority={priority_value}) "
-                f"back {back_distance}m to resolve mutual blocking deadlock"
+                f"Large mutual blocking deadlock ({num_robots} robots), resolving {num_to_resolve} "
+                f"lowest priority robots"
+            )
+        elif num_robots >= 4:
+            # 4-5台机器人：让一半的低优先级机器人后退
+            num_to_resolve = max(2, num_robots // 2)
+            logger.info(
+                f"Medium mutual blocking deadlock ({num_robots} robots), resolving {num_to_resolve} "
+                f"lowest priority robots"
+            )
+        else:
+            # 2-3台机器人：让1台低优先级机器人后退
+            num_to_resolve = 1
+        
+        # 重新加载配置
+        self._load_config()
+        
+        # 让多个低优先级机器人后退
+        success_count = 0
+        for i in range(min(num_to_resolve, len(robot_info))):
+            robot_id_to_resolve = robot_info[i][0]
+            priority_value = robot_info[i][1]
+            avg_distance = robot_info[i][2]
+            execution_time = robot_info[i][3]
+            remaining_actions = -robot_info[i][4]  # 恢复正值
+            
+            logger.info(
+                f"Selected robot {robot_id_to_resolve} to resolve mutual blocking deadlock "
+                f"(priority={priority_value}, avg_distance={avg_distance:.2f}m, "
+                f"execution_time={execution_time:.1f}s, remaining_actions={remaining_actions})"
             )
             
+            agent = self.robot_manager.get_robot_agent(robot_id_to_resolve)
+            if not agent:
+                logger.error(f"Robot agent not found for {robot_id_to_resolve}")
+                continue
+            
+            try:
+                state = await self.robot_manager.get_robot_state(robot_id_to_resolve)
+                if not state:
+                    logger.error(f"Could not get state for robot {robot_id_to_resolve} before resolving")
+                    continue
+                
+                # 后退
+                back_distance = self.mutual_blocking_backoff_distance
+                logger.info(f"Moving robot {robot_id_to_resolve} back {back_distance}m to resolve deadlock")
+                back_x = state.pose.x - math.cos(state.pose.yaw) * back_distance
+                back_y = state.pose.y - math.sin(state.pose.yaw) * back_distance
+                back_pose = Pose(
+                    x=back_x,
+                    y=back_y,
+                    z=state.pose.z,
+                    yaw=state.pose.yaw
+                )
+                
+                await agent.move_to(back_pose, mode=0, acceptable_precision=self.backoff_acceptable_precision, speed_ratio=self.backoff_speed_ratio)
+                logger.info(
+                    f"✓ Successfully moved robot {robot_id_to_resolve} (priority={priority_value}) "
+                    f"back {back_distance}m to resolve mutual blocking deadlock"
+                )
+                success_count += 1
+                
+            except Exception as e:
+                logger.error(
+                    f"✗ Failed to resolve mutual blocking deadlock for robot {robot_id_to_resolve}: {e}",
+                    exc_info=True
+                )
+                continue
+        
+        # 如果至少有一个机器人成功后退，认为死锁已解决
+        if success_count > 0:
             # 从死锁历史中移除
             self.deadlock_history = [
                 d for d in self.deadlock_history
                 if d != deadlock
             ]
             
-            logger.info(f"✓ Mutual blocking deadlock resolved for robots {deadlock.robot_ids}")
-            return True
-            
-        except Exception as e:
-            logger.error(
-                f"✗ Failed to resolve mutual blocking deadlock for robot {robot_id_to_resolve}: {e}",
-                exc_info=True
+            logger.info(
+                f"✓ Mutual blocking deadlock resolved: {success_count}/{num_to_resolve} robots moved "
+                f"for robots {deadlock.robot_ids}"
             )
-            return False
+            return True
+        
+        return False
     
     async def _resolve_resource_contention_deadlock(self, deadlock: DeadlockState) -> bool:
         """解决资源竞争死锁（单个机器人卡住）：尝试重新发送任务指令"""
@@ -1180,4 +1581,191 @@ class DeadlockDetector:
         except Exception as e:
             logger.error(f"Failed to resolve default deadlock for robot {robot_id_to_resolve}: {e}")
             return False
+    
+    async def _resolve_livelock_deadlock(self, deadlock: DeadlockState) -> bool:
+        """解决活锁：让机器人后退或重新规划路径，支持多台机器人场景"""
+        deadlock_logger.info(f"Resolving livelock for robots: {deadlock.robot_ids}")
+        
+        if len(deadlock.robot_ids) < 1:
+            return False
+        
+        # 获取每个机器人对应的任务优先级
+        robot_priorities = []
+        robot_states = {}
+        
+        for robot_id in deadlock.robot_ids:
+            state = await self.robot_manager.get_robot_state(robot_id)
+            if state:
+                robot_states[robot_id] = state
+                priority_value = self._get_robot_task_priority(robot_id)
+                robot_priorities.append((robot_id, priority_value))
+        
+        if not robot_priorities:
+            return False
+        
+        # 按优先级排序（优先级值越小，优先级越低）
+        robot_priorities.sort(key=lambda x: x[1])
+        
+        # 计算需要让行的机器人数量（支持4-8台机器人场景）
+        num_robots = len(robot_priorities)
+        num_to_resolve = 1  # 默认只让1台机器人后退
+        
+        if num_robots >= 6:
+            # 6台或更多机器人：让1/3的低优先级机器人后退
+            num_to_resolve = max(2, (num_robots + 2) // 3)
+            deadlock_logger.info(
+                f"Large livelock ({num_robots} robots), resolving {num_to_resolve} lowest priority robots"
+            )
+        elif num_robots >= 4:
+            # 4-5台机器人：让一半的低优先级机器人后退
+            num_to_resolve = max(2, num_robots // 2)
+            deadlock_logger.info(
+                f"Medium livelock ({num_robots} robots), resolving {num_to_resolve} lowest priority robots"
+            )
+        else:
+            # 1-3台机器人：让1台低优先级机器人后退
+            num_to_resolve = 1
+        
+        # 重新加载配置
+        self._load_config()
+        
+        # 让多个低优先级机器人后退
+        success_count = 0
+        for i in range(min(num_to_resolve, len(robot_priorities))):
+            robot_id_to_resolve, priority_value = robot_priorities[i]
+            
+            agent = self.robot_manager.get_robot_agent(robot_id_to_resolve)
+            if not agent:
+                continue
+            
+            try:
+                state = robot_states[robot_id_to_resolve]
+                if not state:
+                    continue
+                
+                # 后退更远的距离（活锁需要更大的后退距离）
+                back_distance = 2.0  # 活锁需要后退更远
+                back_x = state.pose.x - math.cos(state.pose.yaw) * back_distance
+                back_y = state.pose.y - math.sin(state.pose.yaw) * back_distance
+                back_pose = Pose(
+                    x=back_x,
+                    y=back_y,
+                    z=state.pose.z,
+                    yaw=state.pose.yaw
+                )
+                
+                await agent.move_to(back_pose, mode=0, acceptable_precision=self.backoff_acceptable_precision, speed_ratio=self.backoff_speed_ratio)
+                logger.info(
+                    f"Resolved livelock: robot {robot_id_to_resolve} "
+                    f"(priority={priority_value}) backing up {back_distance}m"
+                )
+                deadlock_logger.info(
+                    f"[LIVELOCK] Robot {robot_id_to_resolve} (priority={priority_value}) backed up {back_distance}m"
+                )
+                success_count += 1
+                
+            except Exception as e:
+                logger.error(f"Failed to resolve livelock for robot {robot_id_to_resolve}: {e}")
+                deadlock_logger.error(f"[LIVELOCK] Failed to resolve for robot {robot_id_to_resolve}: {e}")
+                continue
+        
+        # 如果至少有一个机器人成功后退，认为死锁已解决
+        if success_count > 0:
+            self.deadlock_history = [
+                d for d in self.deadlock_history
+                if d != deadlock
+            ]
+            logger.info(
+                f"✓ Livelock resolved: {success_count}/{num_to_resolve} robots moved"
+            )
+            deadlock_logger.info(
+                f"[LIVELOCK] Resolved: {success_count}/{num_to_resolve} robots moved"
+            )
+            return True
+        
+        return False
+    
+    async def _resolve_starvation_deadlock(self, deadlock: DeadlockState) -> bool:
+        """解决饥饿死锁：强制分配任务或提高优先级"""
+        deadlock_logger.info(f"Resolving starvation deadlock for robots: {deadlock.robot_ids}")
+        
+        if not self.task_scheduler:
+            deadlock_logger.error("[STARVATION] Task scheduler not available")
+            return False
+        
+        # 找到等待时间最长的待分配任务
+        now = datetime.now()
+        longest_waiting_task = None
+        longest_wait_time = 0.0
+        
+        for task in self.task_scheduler.tasks.values():
+            if task.status.value != "PENDING":
+                continue
+            
+            if task.created_at:
+                wait_time = (now - task.created_at).total_seconds()
+                if wait_time > longest_wait_time:
+                    longest_wait_time = wait_time
+                    longest_waiting_task = task
+        
+        if not longest_waiting_task:
+            deadlock_logger.warning("[STARVATION] No pending tasks found")
+            return False
+        
+        # 检查是否有可用机器人
+        available_robots = []
+        for robot_id in deadlock.robot_ids:
+            state = await self.robot_manager.get_robot_state(robot_id)
+            if state and state.status.value in ["idle", "online"]:
+                # 检查是否有正在执行的任务
+                has_executing_task = any(
+                    t.robot_id == robot_id and t.status.value in ["EXECUTING", "ASSIGNED"]
+                    for t in self.task_scheduler.tasks.values()
+                )
+                if not has_executing_task:
+                    available_robots.append(robot_id)
+        
+        if len(available_robots) == 0:
+            deadlock_logger.warning(
+                f"[STARVATION] No available robots for task {longest_waiting_task.task_id}"
+            )
+            return False
+        
+        # 提高任务优先级（如果当前优先级较低）
+        from app.models.task import TaskPriority
+        if longest_waiting_task.priority.value < TaskPriority.HIGH.value:
+            old_priority = longest_waiting_task.priority
+            longest_waiting_task.priority = TaskPriority.HIGH
+            logger.info(
+                f"Starvation resolution: Task {longest_waiting_task.task_id} priority "
+                f"increased from {old_priority.name} to HIGH"
+            )
+            deadlock_logger.info(
+                f"[STARVATION] Task {longest_waiting_task.task_id} priority increased "
+                f"from {old_priority.name} to HIGH"
+            )
+        
+        # 尝试立即分配任务（触发调度器事件）
+        if hasattr(self.task_scheduler, '_scheduler_event') and self.task_scheduler._scheduler_event:
+            self.task_scheduler._scheduler_event.set()
+            deadlock_logger.info(
+                f"[STARVATION] Triggered scheduler event for task {longest_waiting_task.task_id}"
+            )
+        
+        # 从死锁历史中移除
+        self.deadlock_history = [
+            d for d in self.deadlock_history
+            if d != deadlock
+        ]
+        
+        logger.info(
+            f"✓ Starvation deadlock resolved: Task {longest_waiting_task.task_id} "
+            f"priority increased, scheduler triggered"
+        )
+        deadlock_logger.info(
+            f"[STARVATION] Resolved: Task {longest_waiting_task.task_id} priority increased, "
+            f"wait_time={longest_wait_time:.1f}s"
+        )
+        
+        return True
 

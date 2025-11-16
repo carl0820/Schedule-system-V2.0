@@ -51,6 +51,8 @@ class TaskScheduler:
         self.path_planner = path_planner
         self.tasks: Dict[str, Task] = {}  # task_id -> Task
         self._scheduler_task: Optional[asyncio.Task] = None
+        self._scheduler_event: Optional[asyncio.Event] = None  # 用于立即触发调度检查
+        self._task_creation_timestamps: Dict[str, float] = {}  # task_id -> creation_timestamp (用于计算分配耗时)
         
         # 确保数据目录存在
         self.STORAGE_FILE.parent.mkdir(parents=True, exist_ok=True)
@@ -264,53 +266,37 @@ class TaskScheduler:
             创建的任务
         """
         start_time = time.time()
+        task_creation_time = time.time()  # 记录任务创建时间，用于计算分配耗时
         # 自动计算优先级（如果用户没有指定）
+        # 优化：简化优先级计算，避免在创建任务时查询所有机器人（这会阻塞任务创建）
         if task_create.priority is None:
-            # 如果没有起点，尝试使用最近的空闲机器人位置来估算
+            # 使用简化的优先级计算（基于目标位置，不查询机器人状态）
+            # 优先级计算可以在任务分配时进行更精确的计算
             start_pose_for_calc = task_create.start_pose
             if start_pose_for_calc is None:
-                # 查找最近的空闲机器人
-                robot_ids = self.robot_manager.list_robots()
-                min_distance = float('inf')
-                nearest_robot_pose = None
-                
-                for robot_id in robot_ids:
-                    try:
-                        state = await self.robot_manager.get_robot_state(robot_id)
-                        if state and state.status == RobotStatus.IDLE:
-                            # 检查是否有正在执行的任务
-                            has_executing_task = any(
-                                t.robot_id == robot_id and t.status == TaskStatus.EXECUTING
-                                for t in self.tasks.values()
-                            )
-                            if not has_executing_task:
-                                # 计算到目标点的距离
-                                dx = state.pose.x - task_create.target_pose.x
-                                dy = state.pose.y - task_create.target_pose.y
-                                distance = math.sqrt(dx*dx + dy*dy)
-                                if distance < min_distance:
-                                    min_distance = distance
-                                    nearest_robot_pose = state.pose
-                    except Exception as e:
-                        logger.debug(f"Failed to get state for robot {robot_id}: {e}")
-                        continue
-                
-                if nearest_robot_pose:
-                    start_pose_for_calc = nearest_robot_pose
-                    logger.debug(f"Using nearest robot pose for priority calculation: ({nearest_robot_pose.x}, {nearest_robot_pose.y})")
+                # 如果没有起点，使用默认起点（0,0）进行粗略估算
+                start_pose_for_calc = Pose(x=0.0, y=0.0, yaw=0.0)
             
-            # 使用路径规划计算更准确的优先级
-            calculated_priority = self.priority_calculator.calculate_priority_with_path(
-                task_create.target_pose,
-                start_pose_for_calc
-            )
-            # 如果有POI信息，也会影响优先级计算
+            # 使用简化的优先级计算（不进行路径规划，只基于直线距离）
+            dx = task_create.target_pose.x - start_pose_for_calc.x
+            dy = task_create.target_pose.y - start_pose_for_calc.y
+            distance = math.sqrt(dx*dx + dy*dy)
+            
+            # 根据距离估算优先级（距离越远，优先级越高，因为需要更多时间）
+            if distance > 10.0:
+                calculated_priority = TaskPriority.HIGH
+            elif distance > 5.0:
+                calculated_priority = TaskPriority.NORMAL
+            else:
+                calculated_priority = TaskPriority.LOW
+            
+            # 如果有POI信息，适当提高优先级
             if task_create.poi_name:
-                # POI任务通常比较重要，适当提高
                 if calculated_priority.value < TaskPriority.HIGH.value:
                     calculated_priority = TaskPriority.HIGH
+            
             priority = calculated_priority
-            logger.info(f"Auto-calculated priority for new task: {priority.value} ({priority.name})")
+            logger.info(f"Auto-calculated priority for new task (simplified): {priority.value} ({priority.name}), distance={distance:.2f}m")
         else:
             # 用户指定了优先级，使用用户指定的
             priority = task_create.priority
@@ -345,6 +331,68 @@ class TaskScheduler:
             self._scheduler_task = asyncio.create_task(self._scheduler_loop())
         else:
             logger.info("Scheduler loop already running")
+        
+        # 记录任务创建时间戳（用于计算分配耗时）
+        # 使用外部字典存储，因为Task是Pydantic模型，不能直接添加未定义字段
+        self._task_creation_timestamps[task_id] = task_creation_time
+        
+        # 立即触发调度检查（事件驱动，无需等待下一个循环）
+        # 如果事件对象还未初始化，在调度器循环中会初始化
+        if self._scheduler_event is not None:
+            self._scheduler_event.set()
+            logger.debug(f"Triggered scheduler event for new task {task_id}")
+        else:
+            # 如果调度器还没启动，事件对象会在调度器循环中初始化
+            # 这里先创建事件对象，确保可以立即触发
+            self._scheduler_event = asyncio.Event()
+            self._scheduler_event.set()
+            logger.debug(f"Created and triggered scheduler event for new task {task_id}")
+        
+        # 优化：对于连续创建的任务，立即尝试一次快速分配（不等待调度器循环）
+        # 这样可以更快响应，特别是当有可用机器人时
+        try:
+            # 快速检查是否有可用机器人（使用缓存状态，不查询）
+            quick_available = []
+            for robot_id in self.robot_manager.list_robots():
+                cached_state = self.robot_manager.robot_states.get(robot_id)
+                if cached_state and cached_state.status == RobotStatus.IDLE:
+                    # 检查是否有活跃任务
+                    has_active = any(
+                        t.robot_id == robot_id and 
+                        (t.status == TaskStatus.EXECUTING or t.status == TaskStatus.ASSIGNED)
+                        for t in self.tasks.values()
+                    )
+                    if not has_active:
+                        quick_available.append((robot_id, cached_state))
+            
+            # 如果有可用机器人，立即尝试快速分配（不等待调度器循环）
+            # 这对于连续创建的任务特别有效
+            if quick_available:
+                # 快速计算成本（使用直线距离，不进行路径规划）
+                best_robot_id = None
+                best_cost = float('inf')
+                for robot_id, state in quick_available:
+                    if state.pose:
+                        dx = task.target_pose.x - state.pose.x
+                        dy = task.target_pose.y - state.pose.y
+                        cost = math.sqrt(dx*dx + dy*dy)
+                        if cost < best_cost:
+                            best_cost = cost
+                            best_robot_id = robot_id
+                
+                if best_robot_id:
+                    # 再次检查机器人是否仍然可用（防止并发分配）
+                    has_active = any(
+                        t.robot_id == best_robot_id and 
+                        (t.status == TaskStatus.EXECUTING or t.status == TaskStatus.ASSIGNED)
+                        for t in self.tasks.values()
+                    )
+                    if not has_active:
+                        logger.info(f"Quick assignment: task {task_id} to robot {best_robot_id} (cost: {best_cost:.2f}m)")
+                        # 在后台异步分配，不阻塞任务创建
+                        asyncio.create_task(self._assign_task(task, best_robot_id))
+        except Exception as e:
+            logger.debug(f"Quick assignment failed for task {task_id}: {e}, will use normal scheduler")
         
         # 启动碰撞检测任务（如果还没有启动或已停止）
         if self._collision_check_task is None or self._collision_check_task.done():
@@ -435,6 +483,11 @@ class TaskScheduler:
         self.tasks[task_id] = task
         logger.info(f"Multi-action task {task_id} created and saved to memory: {len(task_create.actions)} actions, priority={priority.value}, status={task.status.value}")
         
+        # 记录任务创建时间戳（用于计算分配耗时）
+        # 使用外部字典存储，因为Task是Pydantic模型，不能直接添加未定义字段
+        task_creation_time = time.time()
+        self._task_creation_timestamps[task_id] = task_creation_time
+        
         # 异步处理所有耗时操作（不阻塞返回）
         async def _async_post_creation_tasks():
             """异步处理任务创建后的耗时操作"""
@@ -449,6 +502,18 @@ class TaskScheduler:
                     self._scheduler_task = asyncio.create_task(self._scheduler_loop())
                 else:
                     logger.debug("Scheduler loop already running")
+                
+                # 立即触发调度检查（事件驱动，无需等待下一个循环）
+                # 如果事件对象还未初始化，在调度器循环中会初始化
+                if self._scheduler_event is not None:
+                    self._scheduler_event.set()
+                    logger.debug(f"Triggered scheduler event for new multi-action task {task_id}")
+                else:
+                    # 如果调度器还没启动，事件对象会在调度器循环中初始化
+                    # 这里先创建事件对象，确保可以立即触发
+                    self._scheduler_event = asyncio.Event()
+                    self._scheduler_event.set()
+                    logger.debug(f"Created and triggered scheduler event for new multi-action task {task_id}")
                 
                 # 启动碰撞检测任务（如果还没有启动或已停止）
                 if self._collision_check_task is None or self._collision_check_task.done():
@@ -574,12 +639,35 @@ class TaskScheduler:
     async def _scheduler_loop(self):
         """任务调度循环"""
         logger.info("Task scheduler loop started")
+        
+        # 初始化事件对象（在异步上下文中）
+        if self._scheduler_event is None:
+            self._scheduler_event = asyncio.Event()
+        
         # 确保死锁检测循环已启动（如果还没有启动）
         await self._start_background_tasks_if_needed_async()
         loop_count = 0
         while True:
             try:
                 loop_count += 1
+                
+                # 等待事件触发或超时（0.05秒），实现立即响应和定期检查
+                # 进一步减少超时时间，更快响应新任务
+                try:
+                    await asyncio.wait_for(self._scheduler_event.wait(), timeout=0.05)
+                    self._scheduler_event.clear()  # 清除事件标志
+                    logger.debug("Scheduler triggered by event (new task created)")
+                except asyncio.TimeoutError:
+                    # 超时是正常的，继续执行调度检查
+                    # 如果没有待分配任务，跳过本次循环，减少不必要的计算
+                    pending_tasks_check = [
+                        t for t in self.tasks.values()
+                        if t.status == TaskStatus.PENDING
+                    ]
+                    if not pending_tasks_check:
+                        # 没有待分配任务，继续等待事件
+                        continue
+                
                 # 查找待分配的任务
                 pending_tasks = [
                     t for t in self.tasks.values()
@@ -601,27 +689,74 @@ class TaskScheduler:
                             f"{new_priority.name}({new_priority.value})"
                         )
                 
-                # 按优先级排序
+                # 按优先级排序，相同优先级时按创建时间排序（先创建的任务先执行）
                 if pending_tasks:
-                    pending_tasks.sort(key=lambda t: t.priority.value, reverse=True)
+                    pending_tasks.sort(
+                        key=lambda t: (t.priority.value, t.created_at.timestamp() if t.created_at else 0),
+                        reverse=True
+                    )
                 
-                # 查找空闲的机器人（并发查询，提高效率）
+                # 查找空闲的机器人（优化：优先使用缓存状态，只查询在线机器人）
                 available_robots = []
                 robot_ids = self.robot_manager.list_robots()
-                logger.info(f"Scheduler loop: checking {len(robot_ids)} robots, {len(pending_tasks)} pending tasks")
+                if pending_tasks:
+                    logger.info(f"Scheduler loop: checking {len(robot_ids)} robots, {len(pending_tasks)} pending tasks")
+                else:
+                    # 没有待分配任务，减少日志输出
+                    if loop_count % 20 == 0:
+                        logger.debug(f"Scheduler loop iteration {loop_count}: no pending tasks")
                 
-                # 并发查询所有机器人状态
-                robot_states = await asyncio.gather(
-                    *[self.robot_manager.get_robot_state(robot_id) for robot_id in robot_ids],
-                    return_exceptions=True
-                )
+                # 优化：先使用缓存状态，只对在线机器人进行查询（避免离线机器人阻塞）
+                # 1. 先获取所有机器人的缓存状态
+                cached_states = {}
+                online_robot_ids = []
+                for robot_id in robot_ids:
+                    # 尝试获取缓存状态（不强制更新）
+                    cached_state = self.robot_manager.robot_states.get(robot_id)
+                    if cached_state:
+                        # 检查缓存是否足够新（5秒内）且机器人是在线的
+                        if cached_state.last_update_time:
+                            time_since_update = (datetime.now() - cached_state.last_update_time).total_seconds()
+                            if time_since_update < 5.0 and cached_state.status != RobotStatus.OFFLINE:
+                                cached_states[robot_id] = cached_state
+                                continue  # 使用缓存，不需要查询
+                        # 如果机器人是在线的，需要更新状态
+                        if cached_state.status != RobotStatus.OFFLINE:
+                            online_robot_ids.append(robot_id)
+                    else:
+                        # 没有缓存，需要查询
+                        online_robot_ids.append(robot_id)
                 
-                for robot_id, state in zip(robot_ids, robot_states):
-                    if isinstance(state, Exception):
-                        logger.warning(f"Error getting state for robot {robot_id}: {state}")
+                # 2. 只查询在线机器人（使用短超时，避免阻塞）
+                if online_robot_ids:
+                    robot_states = await asyncio.gather(
+                        *[asyncio.wait_for(
+                            self.robot_manager.get_robot_state(robot_id, force_update=True),
+                            timeout=1.5  # 减少超时时间到1.5秒，更快响应
+                        ) for robot_id in online_robot_ids],
+                        return_exceptions=True
+                    )
+                    # 合并查询结果到缓存状态
+                    for robot_id, state in zip(online_robot_ids, robot_states):
+                        if not isinstance(state, Exception) and state:
+                            cached_states[robot_id] = state
+                
+                # 3. 使用合并后的状态（缓存 + 查询结果）
+                robot_states_list = []
+                for robot_id in robot_ids:
+                    if robot_id in cached_states:
+                        robot_states_list.append((robot_id, cached_states[robot_id]))
+                    else:
+                        robot_states_list.append((robot_id, None))
+                
+                for robot_id, state in robot_states_list:
+                    if not state:
+                        # 跳过没有状态的机器人（可能是离线或查询失败）
                         continue
                     if state:
-                        logger.info(f"Robot {robot_id} status: {state.status.value}")
+                        # 减少日志输出，只在有待分配任务时输出详细信息
+                        if pending_tasks:
+                            logger.debug(f"Robot {robot_id} status: {state.status.value}")
                         # 检查机器人状态是否为 IDLE（空闲）或 BUSY（忙碌但可能刚完成死锁解除）
                         # 注意：死锁解除后机器人可能处于BUSY状态（正在移动到避让点），
                         # 但如果没有活跃任务，仍然应该考虑分配（因为避让是临时状态）
@@ -654,11 +789,13 @@ class TaskScheduler:
                                             )
                                         else:
                                             available_robots.append((robot_id, state))
-                                            logger.info(
-                                                f"Robot {robot_id} is available for task assignment "
-                                                f"(battery: {battery_percentage}%, "
-                                                f"position: ({state.pose.x:.2f}, {state.pose.y:.2f}))"
-                                            )
+                                            # 减少日志输出，只在有多个待分配任务时输出详细信息
+                                            if len(pending_tasks) > 1:
+                                                logger.debug(
+                                                    f"Robot {robot_id} is available for task assignment "
+                                                    f"(battery: {battery_percentage}%, "
+                                                    f"position: ({state.pose.x:.2f}, {state.pose.y:.2f}))"
+                                                )
                                     else:
                                         # 如果没有位置信息，也跳过（可能是离线状态）
                                         logger.warning(
@@ -671,42 +808,59 @@ class TaskScheduler:
                     else:
                         logger.warning(f"Robot {robot_id} state is None, skipping")
                 
-                # 记录调度信息
+                # 记录调度信息（减少日志输出，避免阻塞）
                 if pending_tasks:
-                    logger.info(
-                        f"Scheduler loop: {len(pending_tasks)} pending tasks, "
-                        f"{len(available_robots)} available robots"
-                    )
-                    for task in pending_tasks:
+                    # 只在有多个待分配任务或首次分配时输出详细信息
+                    if len(pending_tasks) > 1 or loop_count % 5 == 0:
                         logger.info(
-                            f"Pending task {task.task_id}: target=({task.target_pose.x}, {task.target_pose.y}), "
-                            f"priority={task.priority.value}, status={task.status.value}"
+                            f"Scheduler loop: {len(pending_tasks)} pending tasks, "
+                            f"{len(available_robots)} available robots"
                         )
-                elif len(self.tasks) > 0:
-                    logger.info(f"Scheduler loop: no pending tasks, but {len(self.tasks)} total tasks exist")
-                    for task_id, task in self.tasks.items():
-                        logger.info(f"Task {task_id}: status={task.status.value}, robot_id={task.robot_id}")
-                else:
-                    if loop_count % 10 == 0:  # 每10次循环输出一次日志，避免日志过多
-                        logger.info(f"Scheduler loop iteration {loop_count}: no tasks, no robots")
+                    else:
+                        logger.debug(
+                            f"Scheduler loop: {len(pending_tasks)} pending tasks, "
+                            f"{len(available_robots)} available robots"
+                        )
                 
                 # 如果没有空闲机器人但有待分配任务，先更新任务状态（可能释放机器人）
                 if not available_robots and pending_tasks:
-                    logger.info(
+                    logger.debug(
                         f"No available robots, {len(pending_tasks)} pending tasks waiting. "
                         f"Updating task status to check for newly available robots..."
                     )
                     # 更新任务状态，可能释放机器人
                     await self._update_executing_tasks()
                     
-                    # 重新检查可用机器人（并发查询）
-                    robot_states = await asyncio.gather(
-                        *[self.robot_manager.get_robot_state(robot_id) for robot_id in robot_ids],
-                        return_exceptions=True
-                    )
+                    # 重新检查可用机器人（使用缓存状态，只查询在线机器人）
+                    # 使用相同的优化策略：优先使用缓存
+                    cached_states = {}
+                    online_robot_ids = []
+                    for robot_id in robot_ids:
+                        cached_state = self.robot_manager.robot_states.get(robot_id)
+                        if cached_state and cached_state.last_update_time:
+                            time_since_update = (datetime.now() - cached_state.last_update_time).total_seconds()
+                            if time_since_update < 5.0 and cached_state.status != RobotStatus.OFFLINE:
+                                cached_states[robot_id] = cached_state
+                                continue
+                        if not cached_state or cached_state.status != RobotStatus.OFFLINE:
+                            online_robot_ids.append(robot_id)
+                    
+                    if online_robot_ids:
+                        robot_states = await asyncio.gather(
+                            *[asyncio.wait_for(
+                                self.robot_manager.get_robot_state(robot_id, force_update=True),
+                                timeout=1.5
+                            ) for robot_id in online_robot_ids],
+                            return_exceptions=True
+                        )
+                        for robot_id, state in zip(online_robot_ids, robot_states):
+                            if not isinstance(state, Exception) and state:
+                                cached_states[robot_id] = state
+                    
                     available_robots = []
-                    for robot_id, state in zip(robot_ids, robot_states):
-                        if isinstance(state, Exception) or not state:
+                    for robot_id in robot_ids:
+                        state = cached_states.get(robot_id)
+                        if not state:
                             continue
                         if state.status == RobotStatus.IDLE:
                             # 检查是否有正在执行或已分配的任务
@@ -727,9 +881,13 @@ class TaskScheduler:
                                         if not is_obstacle:
                                             available_robots.append((robot_id, state))
                     
-                    # 如果仍然没有可用机器人，等待
+                    # 如果仍然没有可用机器人，等待（但如果有新任务事件，立即响应）
                     if not available_robots:
-                        await asyncio.sleep(0.2)  # 减少等待时间到0.2秒，更快响应
+                        # 检查是否有新任务事件（快速检查，不等待）
+                        if self._scheduler_event.is_set():
+                            self._scheduler_event.clear()
+                            continue  # 立即继续循环，处理新任务
+                        await asyncio.sleep(0.1)  # 减少等待时间到0.1秒，更快响应
                         continue
                 
                 # 更新执行中的任务状态（在分配新任务之前）
@@ -741,16 +899,42 @@ class TaskScheduler:
                     if t.status == TaskStatus.PENDING
                 ]
                 if pending_tasks:
-                    pending_tasks.sort(key=lambda t: t.priority.value, reverse=True)
+                    # 按优先级排序，相同优先级时按创建时间排序（先创建的任务先执行）
+                    pending_tasks.sort(
+                        key=lambda t: (t.priority.value, t.created_at.timestamp() if t.created_at else 0),
+                        reverse=True
+                    )
                 
-                # 重新检查可用机器人（因为任务完成可能释放了机器人，并发查询）
-                robot_states = await asyncio.gather(
-                    *[self.robot_manager.get_robot_state(robot_id) for robot_id in robot_ids],
-                    return_exceptions=True
-                )
+                # 重新检查可用机器人（使用缓存状态，只查询在线机器人）
+                # 使用相同的优化策略：优先使用缓存
+                cached_states = {}
+                online_robot_ids = []
+                for robot_id in robot_ids:
+                    cached_state = self.robot_manager.robot_states.get(robot_id)
+                    if cached_state and cached_state.last_update_time:
+                        time_since_update = (datetime.now() - cached_state.last_update_time).total_seconds()
+                        if time_since_update < 5.0 and cached_state.status != RobotStatus.OFFLINE:
+                            cached_states[robot_id] = cached_state
+                            continue
+                    if not cached_state or cached_state.status != RobotStatus.OFFLINE:
+                        online_robot_ids.append(robot_id)
+                
+                if online_robot_ids:
+                    robot_states = await asyncio.gather(
+                        *[asyncio.wait_for(
+                            self.robot_manager.get_robot_state(robot_id, force_update=True),
+                            timeout=1.5
+                        ) for robot_id in online_robot_ids],
+                        return_exceptions=True
+                    )
+                    for robot_id, state in zip(online_robot_ids, robot_states):
+                        if not isinstance(state, Exception) and state:
+                            cached_states[robot_id] = state
+                
                 available_robots = []
-                for robot_id, state in zip(robot_ids, robot_states):
-                    if isinstance(state, Exception) or not state:
+                for robot_id in robot_ids:
+                    state = cached_states.get(robot_id)
+                    if not state:
                         continue
                     if state.status == RobotStatus.IDLE:
                         # 检查是否有正在执行或已分配的任务
@@ -825,8 +1009,26 @@ class TaskScheduler:
                                 logger.warning(f"Task {task.task_id} has invalid target_pose (0,0), using high cost for robot {robot_id}")
                                 return (robot_id, float('inf'))
                             
+                            # 优化：对于简单任务，先使用直线距离快速筛选，只对最优候选进行路径规划
+                            # 计算直线距离作为初步成本估算
+                            dx = target_pose.x - robot_pose.x
+                            dy = target_pose.y - robot_pose.y
+                            straight_distance = math.sqrt(dx*dx + dy*dy)
+                            
                             # 使用asyncio.to_thread在后台线程中执行路径规划（避免阻塞）
-                            path = await asyncio.to_thread(self.path_planner.plan_path, robot_pose, target_pose)
+                            # 添加超时，避免路径规划阻塞太久
+                            path = None
+                            try:
+                                path = await asyncio.wait_for(
+                                    asyncio.to_thread(self.path_planner.plan_path, robot_pose, target_pose),
+                                    timeout=2.0  # 减少超时时间到2秒，更快响应
+                                )
+                            except asyncio.TimeoutError:
+                                logger.debug(f"Path planning timeout for robot {robot_id}, using straight-line distance")
+                                path = None
+                            except Exception as e:
+                                logger.debug(f"Path planning error for robot {robot_id}: {e}, using straight-line distance")
+                                path = None
                             
                             if path and len(path) > 1:
                                 # 计算路径总长度
@@ -836,7 +1038,8 @@ class TaskScheduler:
                                     dy = path[i+1].y - path[i].y
                                     path_length += math.sqrt(dx*dx + dy*dy)
                                 
-                                # 检查路径是否与其他机器人已规划的路径碰撞
+                                # 优化：简化碰撞检测，只检查关键点（减少计算时间）
+                                # 对于连续创建的任务，快速分配比精确碰撞检测更重要
                                 collision_penalty = await self._check_path_collision_with_planned_paths(
                                     robot_id, path, task.task_id
                                 )
@@ -845,10 +1048,8 @@ class TaskScheduler:
                                 cost = path_length + collision_penalty
                             else:
                                 # 如果路径规划失败，使用直线距离作为备选
-                                dx = target_pose.x - robot_pose.x
-                                dy = target_pose.y - robot_pose.y
-                                cost = math.sqrt(dx*dx + dy*dy)
-                                logger.warning(
+                                cost = straight_distance
+                                logger.debug(
                                     f"Path planning failed for robot {robot_id} to task {task.task_id}, "
                                     f"using straight-line distance: {cost:.2f}m"
                                 )
@@ -871,9 +1072,9 @@ class TaskScheduler:
                             best_cost = cost
                             best_robot_id = robot_id
                     
-                    # 记录所有机器人的成本，便于调试
-                    if robot_costs:
-                        logger.info(
+                    # 记录所有机器人的成本，便于调试（减少日志输出）
+                    if robot_costs and len(pending_tasks) <= 2:
+                        logger.debug(
                             f"Task {task.task_id} robot selection: "
                             f"{', '.join([f'{r_id}({cost:.2f}m)' for r_id, cost in robot_costs])}"
                         )
@@ -895,10 +1096,27 @@ class TaskScheduler:
                             continue
                         
                         # 分配任务
-                        logger.info(
-                            f"Assigning task {task.task_id} to robot {best_robot_id} "
-                            f"(best cost: {best_cost:.2f}m, target: ({task.target_pose.x}, {task.target_pose.y}))"
-                        )
+                        # 计算从创建到分配的时间
+                        assignment_time = time.time()
+                        assignment_delay = 0.0
+                        if task.task_id in self._task_creation_timestamps:
+                            assignment_delay = assignment_time - self._task_creation_timestamps[task.task_id]
+                            logger.info(
+                                f"Assigning task {task.task_id} to robot {best_robot_id} "
+                                f"(best cost: {best_cost:.2f}m, target: ({task.target_pose.x}, {task.target_pose.y}), "
+                                f"assignment delay: {assignment_delay:.2f}s)"
+                            )
+                            if assignment_delay > 10.0:
+                                logger.warning(
+                                    f"Task {task.task_id} assignment delay ({assignment_delay:.2f}s) exceeds 10s threshold!"
+                                )
+                            # 分配完成后，清理时间戳（节省内存）
+                            del self._task_creation_timestamps[task.task_id]
+                        else:
+                            logger.info(
+                                f"Assigning task {task.task_id} to robot {best_robot_id} "
+                                f"(best cost: {best_cost:.2f}m, target: ({task.target_pose.x}, {task.target_pose.y}))"
+                            )
                         await self._assign_task(task, best_robot_id)
                         # 从可用列表中移除（立即移除，防止下一个任务重复分配）
                         available_robots = [(r, s) for r, s in available_robots if r != best_robot_id]
@@ -911,8 +1129,7 @@ class TaskScheduler:
                 # 更新执行中的任务状态
                 await self._update_executing_tasks()
                 
-                # 等待0.2秒后再次调度（提高响应速度，更快分配任务）
-                await asyncio.sleep(0.2)
+                # 不再需要sleep，因为事件机制已经处理了等待
                 
             except Exception as e:
                 logger.error(f"Error in scheduler loop: {e}")
@@ -1187,6 +1404,12 @@ class TaskScheduler:
                     elif deadlock.deadlock_type == "resource_contention":
                         # 资源竞争（单个机器人卡住）使用较短的阈值
                         threshold = 5.0  # 5秒后认为卡住
+                    elif deadlock.deadlock_type == "livelock":
+                        # 活锁使用较长的阈值（因为需要观察一段时间才能确定）
+                        threshold = self.deadlock_detector.livelock_threshold
+                    elif deadlock.deadlock_type == "starvation":
+                        # 饥饿死锁使用较长的阈值
+                        threshold = self.deadlock_detector.starvation_deadlock_threshold
                     
                     # 记录死锁检测信息（即使未超过阈值也记录，便于调试）
                     if deadlock.duration > threshold:
@@ -1765,41 +1988,90 @@ class TaskScheduler:
         collision_penalty = 0.0
         
         # 获取所有正在执行的任务的规划路径
+        # 重要：只检查正在执行的任务，不取消它们，而是通过增加惩罚来让新任务等待
         executing_tasks = [
             t for t in self.tasks.values()
             if t.status == TaskStatus.EXECUTING 
             and t.task_id != current_task_id
-            and t.task_id in self.task_paths
         ]
         
         for other_task in executing_tasks:
             other_path = self.task_paths.get(other_task.task_id)
-            if not other_path or len(other_path) == 0:
-                continue
+            other_target = other_task.target_pose
             
-            # 检查两个路径是否碰撞
-            # 简化：检查路径点之间的距离
+            # 优化：检查两个路径是否碰撞（使用采样点，减少计算量）
+            # 对于长路径，只检查关键点（起点、终点、中间采样点）
             min_distance = float('inf')
             collision_points = []
+            target_collision = False  # 是否经过正在执行任务的目标点
             
-            for i, path_point in enumerate(path):
-                for j, other_point in enumerate(other_path):
-                    dx = path_point.x - other_point.x
-                    dy = path_point.y - other_point.y
-                    distance = math.sqrt(dx*dx + dy*dy)
-                    
-                    # 安全距离 = 机器人半径 * 2 + 安全距离
-                    safety_distance = 0.3 * 2 + self.collision_detector.safety_distance
+            # 安全距离 = 机器人半径 * 2 + 安全距离
+            safety_distance = 0.3 * 2 + self.collision_detector.safety_distance
+            
+            # 重要：首先检查新任务的路径是否经过正在执行任务的目标点
+            # 如果经过，应该让新任务等待，而不是取消正在执行的任务
+            if other_target:
+                for path_point in path:
+                    dx = path_point.x - other_target.x
+                    dy = path_point.y - other_target.y
+                    distance_sq = dx*dx + dy*dy
+                    distance = math.sqrt(distance_sq) if distance_sq < safety_distance * safety_distance else float('inf')
                     
                     if distance < safety_distance:
+                        target_collision = True
                         min_distance = min(min_distance, distance)
-                        collision_points.append((i, j, distance))
+                        if return_collisions:
+                            collision_points.append(('target', 'target', distance))
+                        logger.info(
+                            f"New task path passes through executing task {other_task.task_id}'s target point "
+                            f"({other_target.x:.2f}, {other_target.y:.2f}), "
+                            f"distance={distance:.2f}m. New task will wait (penalty increased)."
+                        )
+                        break  # 找到目标点碰撞即可
+            
+            # 如果路径存在，检查路径之间的碰撞
+            if other_path and len(other_path) > 0:
+                # 优化：对路径进行采样，减少计算量
+                # 对于短路径（<10个点），检查所有点；对于长路径，采样检查
+                path_sample = path
+                other_path_sample = other_path
+                if len(path) > 10:
+                    # 采样：起点、终点、中间均匀采样
+                    step = max(1, len(path) // 5)
+                    path_sample = [path[i] for i in range(0, len(path), step)] + [path[-1]]
+                if len(other_path) > 10:
+                    step = max(1, len(other_path) // 5)
+                    other_path_sample = [other_path[i] for i in range(0, len(other_path), step)] + [other_path[-1]]
+                
+                for i, path_point in enumerate(path_sample):
+                    for j, other_point in enumerate(other_path_sample):
+                        dx = path_point.x - other_point.x
+                        dy = path_point.y - other_point.y
+                        distance_sq = dx*dx + dy*dy  # 使用平方距离，避免开方
+                        distance = math.sqrt(distance_sq) if distance_sq < safety_distance * safety_distance else float('inf')
+                        
+                        if distance < safety_distance:
+                            min_distance = min(min_distance, distance)
+                            if return_collisions:
+                                collision_points.append((i, j, distance))
             
             # 如果有碰撞，计算惩罚值
+            # 重要：如果新任务路径经过正在执行任务的目标点，增加更大的惩罚值
+            # 这样新任务会等待正在执行的任务完成，而不是取消它
             if min_distance < float('inf'):
-                # 惩罚值 = (安全距离 - 最小距离) / 安全距离 * 路径长度
-                # 碰撞越严重，惩罚值越大
-                penalty = (safety_distance - min_distance) / safety_distance * len(path) * 10.0
+                # 基础惩罚值 = (安全距离 - 最小距离) / 安全距离 * 路径长度 * 10.0
+                base_penalty = (safety_distance - min_distance) / safety_distance * len(path) * 10.0
+                
+                # 如果经过正在执行任务的目标点，惩罚值增加3倍，确保新任务等待
+                if target_collision:
+                    penalty = base_penalty * 3.0
+                    logger.info(
+                        f"Path collision with executing task {other_task.task_id}'s target point: "
+                        f"penalty increased to {penalty:.2f} (base: {base_penalty:.2f})"
+                    )
+                else:
+                    penalty = base_penalty
+                
                 collision_penalty += penalty
                 
                 if return_collisions:
@@ -1807,7 +2079,8 @@ class TaskScheduler:
                         'task_id': other_task.task_id,
                         'robot_id': other_task.robot_id,
                         'collision_points': collision_points,
-                        'min_distance': min_distance
+                        'min_distance': min_distance,
+                        'target_collision': target_collision
                     })
         
         if return_collisions:
@@ -2086,27 +2359,56 @@ class TaskScheduler:
                     if state and state.status.value == "idle" and state.pose:
                         idle_robots.append((robot_id, state.pose))
             
+            # 获取所有正在执行任务的机器人ID（这些机器人不应该被移动到避让点）
+            executing_robot_ids = set()
+            for task in self.tasks.values():
+                if task.status == TaskStatus.EXECUTING and task.robot_id:
+                    executing_robot_ids.add(task.robot_id)
+                elif task.status == TaskStatus.ASSIGNED and task.robot_id:
+                    executing_robot_ids.add(task.robot_id)
+            
             # 合并已完成任务、失败任务和IDLE状态的机器人
+            # 重要：排除正在执行任务的机器人
             blocking_robots = []
             for completed_task in completed_tasks:
                 completed_robot_id = completed_task.robot_id
+                # 如果这个机器人正在执行其他任务，不应该让它避让
+                if completed_robot_id in executing_robot_ids:
+                    logger.debug(
+                        f"Robot {completed_robot_id} has completed task {completed_task.task_id} "
+                        f"but is executing another task, skipping blocking check"
+                    )
+                    continue
                 if completed_robot_id in self.completed_robots_avoiding:
                     continue
                 state = await self.robot_manager.get_robot_state(completed_robot_id)
                 if state and state.pose:
                     blocking_robots.append((completed_robot_id, state.pose, completed_task.task_id, "completed"))
             
-            # 添加失败任务的机器人
+            # 添加失败任务的机器人（同样排除正在执行任务的机器人）
             for failed_task in failed_tasks:
                 failed_robot_id = failed_task.robot_id
+                # 如果这个机器人正在执行其他任务，不应该让它避让
+                if failed_robot_id in executing_robot_ids:
+                    logger.debug(
+                        f"Robot {failed_robot_id} has failed task {failed_task.task_id} "
+                        f"but is executing another task, skipping blocking check"
+                    )
+                    continue
                 if failed_robot_id in self.completed_robots_avoiding:
                     continue
                 state = await self.robot_manager.get_robot_state(failed_robot_id)
                 if state and state.pose:
                     blocking_robots.append((failed_robot_id, state.pose, failed_task.task_id, "failed"))
             
-            # 添加IDLE状态的机器人
+            # 添加IDLE状态的机器人（同样排除正在执行任务的机器人）
             for robot_id, pose in idle_robots:
+                # 如果这个机器人正在执行任务，不应该让它避让
+                if robot_id in executing_robot_ids:
+                    logger.debug(
+                        f"Robot {robot_id} is idle but has an executing task, skipping blocking check"
+                    )
+                    continue
                 if robot_id not in self.completed_robots_avoiding:
                     blocking_robots.append((robot_id, pose, None, "idle"))
             
@@ -2214,7 +2516,7 @@ class TaskScheduler:
         blocking_tasks: List[Task]
     ):
         """
-        将已完成任务的机器人移动到避让点
+        将已完成任务的机器人移动到避让点（优化：确保避让点远离被阻塞的路径和目标点）
         
         Args:
             robot_id: 机器人ID
@@ -2226,28 +2528,75 @@ class TaskScheduler:
             if not agent:
                 return
             
-            # 计算避让点：向后退2.5米（增加距离，确保完全让出路径），或移动到路径一侧
-            # 优先选择后退，因为更简单
-            backoff_distance = 2.5  # 增加后退距离，确保完全让出路径
+            # 避让点必须远离所有被阻塞的路径和目标点（至少3米）
+            min_safe_distance = 3.0  # 避让点必须距离路径和目标点至少3米
             
-            # 计算后退目标点（沿着当前朝向的反方向）
-            back_x = current_pose.x - math.cos(current_pose.yaw) * backoff_distance
-            back_y = current_pose.y - math.sin(current_pose.yaw) * backoff_distance
+            # 计算避让点：尝试多个距离，从远到近，找到第一个有效的避让点
+            backoff_distances = [5.0, 4.0, 3.0, 2.5]  # 优先选择更远的避让点
             
-            # 检查后退点是否在地图范围内且不是障碍物
-            if (self.path_planner.map_manager.is_valid_coordinate(back_x, back_y) and
-                not self.path_planner.map_manager.is_obstacle(back_x, back_y)):
+            backoff_pose = None
+            for backoff_distance in backoff_distances:
+                # 计算后退目标点（沿着当前朝向的反方向）
+                back_x = current_pose.x - math.cos(current_pose.yaw) * backoff_distance
+                back_y = current_pose.y - math.sin(current_pose.yaw) * backoff_distance
                 
-                backoff_pose = Pose(
-                    x=back_x,
-                    y=back_y,
-                    z=current_pose.z,
-                    yaw=current_pose.yaw
-                )
+                # 检查后退点是否在地图范围内且不是障碍物
+                if not (self.path_planner.map_manager.is_valid_coordinate(back_x, back_y) and
+                        not self.path_planner.map_manager.is_obstacle(back_x, back_y)):
+                    continue
                 
+                # 验证避让点是否远离所有被阻塞的路径和目标点
+                is_far_enough = True
+                for task in blocking_tasks:
+                    # 检查避让点是否远离执行中机器人的当前位置
+                    executing_robot_state = await self.robot_manager.get_robot_state(task.robot_id)
+                    if executing_robot_state and executing_robot_state.pose:
+                        dx = back_x - executing_robot_state.pose.x
+                        dy = back_y - executing_robot_state.pose.y
+                        distance = math.sqrt(dx*dx + dy*dy)
+                        if distance < min_safe_distance:
+                            is_far_enough = False
+                            break
+                    
+                    # 检查避让点是否远离路径
+                    path = self.task_paths.get(task.task_id)
+                    if path:
+                        for path_point in path:
+                            dx = back_x - path_point.x
+                            dy = back_y - path_point.y
+                            distance = math.sqrt(dx*dx + dy*dy)
+                            if distance < min_safe_distance:
+                                is_far_enough = False
+                                break
+                        if not is_far_enough:
+                            break
+                    
+                    # 检查避让点是否远离目标点
+                    if task.target_pose:
+                        dx = back_x - task.target_pose.x
+                        dy = back_y - task.target_pose.y
+                        distance = math.sqrt(dx*dx + dy*dy)
+                        if distance < min_safe_distance:
+                            is_far_enough = False
+                            break
+                
+                if is_far_enough:
+                    backoff_pose = Pose(
+                        x=back_x,
+                        y=back_y,
+                        z=current_pose.z,
+                        yaw=current_pose.yaw
+                    )
+                    logger.info(
+                        f"Found valid avoidance point for robot {robot_id} at "
+                        f"({back_x:.2f}, {back_y:.2f}), distance={backoff_distance:.2f}m"
+                    )
+                    break
+            
+            if backoff_pose:
                 logger.info(
                     f"Moving completed task robot {robot_id} to avoidance point "
-                    f"({back_x:.2f}, {back_y:.2f})"
+                    f"({backoff_pose.x:.2f}, {backoff_pose.y:.2f})"
                 )
                 
                 # 移动到避让点（使用较高速度，快速让出路径）
@@ -2255,10 +2604,45 @@ class TaskScheduler:
                     backoff_pose,
                     mode=0,  # Free Navigation
                     acceptable_precision=0.3,
-                    speed_ratio=0.8  # 提高速度，快速让出路径（从0.5提高到0.8）
+                    speed_ratio=0.8  # 提高速度，快速让出路径
                 )
                 
                 logger.info(f"Robot {robot_id} moved to avoidance point")
+                
+                # 等待一小段时间让机器人到达避让点
+                await asyncio.sleep(1.0)
+                
+                # 验证避让是否成功：检查是否仍然阻塞
+                new_state = await self.robot_manager.get_robot_state(robot_id)
+                if new_state and new_state.pose:
+                    still_blocking = False
+                    for task in blocking_tasks:
+                        executing_robot_state = await self.robot_manager.get_robot_state(task.robot_id)
+                        if executing_robot_state and executing_robot_state.pose:
+                            dx = new_state.pose.x - executing_robot_state.pose.x
+                            dy = new_state.pose.y - executing_robot_state.pose.y
+                            distance = math.sqrt(dx*dx + dy*dy)
+                            if distance < 1.4:  # 仍然阻塞
+                                still_blocking = True
+                                logger.warning(
+                                    f"Robot {robot_id} still blocking after avoidance "
+                                    f"(distance={distance:.2f}m < 1.4m). Sending robot back to charging dock."
+                                )
+                                break
+                    
+                    if still_blocking:
+                        # 避让失败，直接回桩（最可靠的避让方式）
+                        try:
+                            go_home_result = await agent.go_home()
+                            logger.info(
+                                f"Robot {robot_id} sent back to charging dock as avoidance failed. "
+                                f"Action ID: {go_home_result.action_id if go_home_result else 'None'}"
+                            )
+                        except Exception as e:
+                            logger.error(f"Failed to send robot {robot_id} back to charging dock: {e}")
+                    else:
+                        logger.info(f"Robot {robot_id} successfully avoided blocking position")
+                
                 # 从避让列表中移除（避让动作已完成）
                 self.completed_robots_avoiding.discard(robot_id)
             else:
@@ -2279,24 +2663,72 @@ class TaskScheduler:
                     
                     if count > 0:
                         avg_direction /= count
-                        # 垂直于路径方向移动（增加距离）
-                        side_distance = 1.5  # 增加侧移距离，确保完全让出路径
-                        side_x = current_pose.x + math.cos(avg_direction + math.pi/2) * side_distance
-                        side_y = current_pose.y + math.sin(avg_direction + math.pi/2) * side_distance
+                        # 垂直于路径方向移动（尝试多个距离，从远到近）
+                        side_distances = [4.0, 3.0, 2.0, 1.5]  # 优先选择更远的侧移点
+                        side_pose = None
                         
-                        if (self.path_planner.map_manager.is_valid_coordinate(side_x, side_y) and
-                            not self.path_planner.map_manager.is_obstacle(side_x, side_y)):
+                        for side_distance in side_distances:
+                            # 尝试两个方向（左右两侧）
+                            for direction_offset in [math.pi/2, -math.pi/2]:
+                                side_x = current_pose.x + math.cos(avg_direction + direction_offset) * side_distance
+                                side_y = current_pose.y + math.sin(avg_direction + direction_offset) * side_distance
+                                
+                                if not (self.path_planner.map_manager.is_valid_coordinate(side_x, side_y) and
+                                        not self.path_planner.map_manager.is_obstacle(side_x, side_y)):
+                                    continue
+                                
+                                # 验证侧移点是否远离所有被阻塞的路径和目标点
+                                is_far_enough = True
+                                for task in blocking_tasks:
+                                    executing_robot_state = await self.robot_manager.get_robot_state(task.robot_id)
+                                    if executing_robot_state and executing_robot_state.pose:
+                                        dx = side_x - executing_robot_state.pose.x
+                                        dy = side_y - executing_robot_state.pose.y
+                                        distance = math.sqrt(dx*dx + dy*dy)
+                                        if distance < min_safe_distance:
+                                            is_far_enough = False
+                                            break
+                                    
+                                    path = self.task_paths.get(task.task_id)
+                                    if path:
+                                        for path_point in path:
+                                            dx = side_x - path_point.x
+                                            dy = side_y - path_point.y
+                                            distance = math.sqrt(dx*dx + dy*dy)
+                                            if distance < min_safe_distance:
+                                                is_far_enough = False
+                                                break
+                                        if not is_far_enough:
+                                            break
+                                    
+                                    if task.target_pose:
+                                        dx = side_x - task.target_pose.x
+                                        dy = side_y - task.target_pose.y
+                                        distance = math.sqrt(dx*dx + dy*dy)
+                                        if distance < min_safe_distance:
+                                            is_far_enough = False
+                                            break
+                                
+                                if is_far_enough:
+                                    side_pose = Pose(
+                                        x=side_x,
+                                        y=side_y,
+                                        z=current_pose.z,
+                                        yaw=current_pose.yaw
+                                    )
+                                    logger.info(
+                                        f"Found valid side avoidance point for robot {robot_id} at "
+                                        f"({side_x:.2f}, {side_y:.2f}), distance={side_distance:.2f}m"
+                                    )
+                                    break
                             
-                            side_pose = Pose(
-                                x=side_x,
-                                y=side_y,
-                                z=current_pose.z,
-                                yaw=current_pose.yaw
-                            )
-                            
+                            if side_pose:
+                                break
+                        
+                        if side_pose:
                             logger.info(
                                 f"Moving completed task robot {robot_id} to side avoidance point "
-                                f"({side_x:.2f}, {side_y:.2f})"
+                                f"({side_pose.x:.2f}, {side_pose.y:.2f})"
                             )
                             
                             await agent.move_to(
@@ -2307,20 +2739,85 @@ class TaskScheduler:
                             )
                             
                             logger.info(f"Robot {robot_id} moved to side avoidance point")
+                            
+                            # 等待一小段时间让机器人到达避让点
+                            await asyncio.sleep(1.0)
+                            
+                            # 验证避让是否成功
+                            new_state = await self.robot_manager.get_robot_state(robot_id)
+                            if new_state and new_state.pose:
+                                still_blocking = False
+                                for task in blocking_tasks:
+                                    executing_robot_state = await self.robot_manager.get_robot_state(task.robot_id)
+                                    if executing_robot_state and executing_robot_state.pose:
+                                        dx = new_state.pose.x - executing_robot_state.pose.x
+                                        dy = new_state.pose.y - executing_robot_state.pose.y
+                                        distance = math.sqrt(dx*dx + dy*dy)
+                                        if distance < 1.4:  # 仍然阻塞
+                                            still_blocking = True
+                                            logger.warning(
+                                                f"Robot {robot_id} still blocking after side avoidance "
+                                                f"(distance={distance:.2f}m < 1.4m). Sending robot back to charging dock."
+                                            )
+                                            break
+                                
+                                if still_blocking:
+                                    # 避让失败，直接回桩
+                                    try:
+                                        go_home_result = await agent.go_home()
+                                        logger.info(
+                                            f"Robot {robot_id} sent back to charging dock as side avoidance failed. "
+                                            f"Action ID: {go_home_result.action_id if go_home_result else 'None'}"
+                                        )
+                                    except Exception as e:
+                                        logger.error(f"Failed to send robot {robot_id} back to charging dock: {e}")
+                                else:
+                                    logger.info(f"Robot {robot_id} successfully avoided blocking position (side)")
+                            
                             # 从避让列表中移除（避让动作已完成）
                             self.completed_robots_avoiding.discard(robot_id)
                         else:
+                            # 无法找到有效的侧移避让点，直接回桩
                             logger.warning(
-                                f"Cannot find valid avoidance point for robot {robot_id}. "
-                                f"Backoff point and side point are both invalid."
+                                f"Cannot find valid side avoidance point for robot {robot_id}. "
+                                f"Sending robot back to charging dock instead."
                             )
+                            try:
+                                go_home_result = await agent.go_home()
+                                logger.info(
+                                    f"Robot {robot_id} sent back to charging dock as no valid side avoidance point found. "
+                                    f"Action ID: {go_home_result.action_id if go_home_result else 'None'}"
+                                )
+                                self.completed_robots_avoiding.discard(robot_id)
+                            except Exception as e:
+                                logger.error(f"Failed to send robot {robot_id} back to charging dock: {e}")
                     else:
+                        # 无法计算避让方向，直接回桩
                         logger.warning(
                             f"Cannot calculate avoidance direction for robot {robot_id}. "
-                            f"No valid paths found."
+                            f"No valid paths found. Sending robot back to charging dock."
                         )
+                        try:
+                            go_home_result = await agent.go_home()
+                            logger.info(
+                                f"Robot {robot_id} sent back to charging dock as no valid avoidance direction found. "
+                                f"Action ID: {go_home_result.action_id if go_home_result else 'None'}"
+                            )
+                            self.completed_robots_avoiding.discard(robot_id)
+                        except Exception as e:
+                            logger.error(f"Failed to send robot {robot_id} back to charging dock: {e}")
                 else:
-                    logger.warning(f"No blocking tasks found for robot {robot_id}")
+                    # 没有阻塞任务，但被调用到这里，直接回桩（安全起见）
+                    logger.warning(f"No blocking tasks found for robot {robot_id}, but avoidance was triggered. Sending robot back to charging dock.")
+                    try:
+                        go_home_result = await agent.go_home()
+                        logger.info(
+                            f"Robot {robot_id} sent back to charging dock (no blocking tasks but avoidance triggered). "
+                            f"Action ID: {go_home_result.action_id if go_home_result else 'None'}"
+                        )
+                        self.completed_robots_avoiding.discard(robot_id)
+                    except Exception as e:
+                        logger.error(f"Failed to send robot {robot_id} back to charging dock: {e}")
                     
         except Exception as e:
             logger.error(f"Failed to move completed task robot {robot_id} to avoidance point: {e}")
