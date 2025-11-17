@@ -8252,7 +8252,1350 @@
         }
       ],
       "current_action_index": 1
+    },
+    {
+      "task_id": "dbc40f12-2110-4c86-9581-4bc5bde45df8",
+      "robot_id": "p3_1",
+      "status": "completed",
+      "start_pose": null,
+      "target_pose": {
+        "x": 8.4,
+        "y": 0.42,
+        "z": 0.0,
+        "yaw": 0.0,
+        "pitch": 0.0,
+        "roll": 0.0
+      },
+      "priority": 2,
+      "action_id": 205,
+      "created_at": "2025-11-17 09:32:32.026266",
+      "assigned_at": "2025-11-17 09:32:59.276608",
+      "started_at": "2025-11-17 09:32:59.552842",
+      "completed_at": "2025-11-17 09:33:25.618812",
+      "error_message": null,
+      "retry_count": 0,
+      "is_multi_action": false,
+      "actions": null,
+      "current_action_index": 0
+    },
+    {
+      "task_id": "91c53d64-70d5-4e3b-ac6d-502db843b902",
+      "robot_id": "phoebus",
+      "status": "completed",
+      "start_pose": null,
+      "target_pose": {
+        "x": 0.0,
+        "y": 0.0,
+        "z": 0.0,
+        "yaw": 0.0,
+        "pitch": 0.0,
+        "roll": 0.0
+      },
+      "priority": 2,
+      "action_id": 1409,
+      "created_at": "2025-11-17 09:32:51.272203",
+      "assigned_at": "2025-11-17 09:33:27.875704",
+      "started_at": "2025-11-17 09:33:28.104024",
+      "completed_at": "2025-11-17 09:35:49.191595",
+      "error_message": null,
+      "retry_count": 0,
+      "is_multi_action": true,
+      "actions": [
+        {
+          "action_type": "move_to",
+          "target_pose": null,
+          "poi_name": "128595a5-36e1-485b-a25f-41355e0a0178",
+          "poi_display_name": "P02",
+          "wait_duration": null,
+          "acceptable_precision": 0.3,
+          "speed_ratio": 1.0
+        },
+        {
+          "action_type": "move_to",
+          "target_pose": null,
+          "poi_name": "2b3439ab-487f-445a-9842-e3d35d675f3a",
+          "poi_display_name": "PO4",
+          "wait_duration": null,
+          "acceptable_precision": 0.3,
+          "speed_ratio": 1.0
+        },
+        {
+          "action_type": "go_home",
+          "target_pose": null,
+          "poi_name": null,
+          "poi_display_name": null,
+          "wait_duration": null,
+          "acceptable_precision": 0.3,
+          "speed_ratio": 1.0
+        }
+      ],
+      "current_action_index": 3
+    },
+    {
+      "task_id": "d37fafcd-6752-43d4-aa91-5c21963c8896",
+      "robot_id": "p3_1",
+      "status": "completed",
+      "start_pose": null,
+      "target_pose": {
+        "x": 0.0,
+        "y": 0.0,
+        "z": 0.0,
+        "yaw": 0.0,
+        "pitch": 0.0,
+        "roll": 0.0
+      },
+      "priority": 2,
+      "action_id": 207,
+      "created_at": "2025-11-17 09:56:15.307988",
+      "assigned_at": "2025-11-17 09:56:41.330444",
+      "started_at": "2025-11-17 09:56:41.649759",
+      "completed_at": "2025-11-17 09:57:27.061744",
+      "error_message": null,
+      "retry_count": 0,
+      "is_multi_action": true,
+      "actions": [
+        {
+          "action_type": "move_to",
+          "target_pose": null,
+          "poi_name": "eb979c65-cfa6-4363-a4b6-7bfd4075e11b",
+          "poi_display_name": "PO8",
+          "wait_duration": null,
+          "acceptable_precision": 0.3,
+          "speed_ratio": 1.0
+        },
+        {
+          "action_type": "go_home",
+          "target_pose": null,
+          "poi_name": null,
+          "poi_display_name": null,
+          "wait_duration": null,
+          "acceptable_precision": 0.3,
+          "speed_ratio": 1.0
+        }
+      ],
+      "current_action_index": 2
+    },
+    {
+      "task_id": "0e840716-524a-468b-8f4e-933767fc33a7",
+      "robot_id": "p3_1",
+      "status": "completed",
+      "start_pose": null,
+      "target_pose": {
+        "x": 8.4,
+        "y": 0.42,
+        "z": 0.0,
+        "yaw": 0.0,
+        "pitch": 0.0,
+        "roll": 0.0
+      },
+      "priority": 2,
+      "action_id": 210,
+      "created_at": "2025-11-17 11:58:08.756567",
+      "assigned_at": "2025-11-17 11:58:46.207265",
+      "started_at": "2025-11-17 11:58:46.426458",
+      "completed_at": "2025-11-17 11:59:06.491358",
+      "error_message": null,
+      "retry_count": 0,
+      "is_multi_action": false,
+      "actions": null,
+      "current_action_index": 0
+    },
+    {
+      "task_id": "d9be7344-c873-492e-8865-ab226e683a1f",
+      "robot_id": "phoebus",
+      "status": "completed",
+      "start_pose": null,
+      "target_pose": {
+        "x": 0.0,
+        "y": 0.0,
+        "z": 0.0,
+        "yaw": 0.0,
+        "pitch": 0.0,
+        "roll": 0.0
+      },
+      "priority": 2,
+      "action_id": 1412,
+      "created_at": "2025-11-17 11:58:24.599491",
+      "assigned_at": "2025-11-17 11:59:28.295050",
+      "started_at": "2025-11-17 11:59:28.500490",
+      "completed_at": "2025-11-17 12:02:32.482240",
+      "error_message": null,
+      "retry_count": 0,
+      "is_multi_action": true,
+      "actions": [
+        {
+          "action_type": "move_to",
+          "target_pose": null,
+          "poi_name": "128595a5-36e1-485b-a25f-41355e0a0178",
+          "poi_display_name": "P02",
+          "wait_duration": null,
+          "acceptable_precision": 0.3,
+          "speed_ratio": 1.0
+        },
+        {
+          "action_type": "move_to",
+          "target_pose": null,
+          "poi_name": "2b3439ab-487f-445a-9842-e3d35d675f3a",
+          "poi_display_name": "PO4",
+          "wait_duration": null,
+          "acceptable_precision": 0.3,
+          "speed_ratio": 1.0
+        },
+        {
+          "action_type": "go_home",
+          "target_pose": null,
+          "poi_name": null,
+          "poi_display_name": null,
+          "wait_duration": null,
+          "acceptable_precision": 0.3,
+          "speed_ratio": 1.0
+        }
+      ],
+      "current_action_index": 3
+    },
+    {
+      "task_id": "6fa7782a-678b-42a6-bd76-0518d5445068",
+      "robot_id": "p3_1",
+      "status": "completed",
+      "start_pose": null,
+      "target_pose": {
+        "x": 0.0,
+        "y": 0.0,
+        "z": 0.0,
+        "yaw": 0.0,
+        "pitch": 0.0,
+        "roll": 0.0
+      },
+      "priority": 2,
+      "action_id": 213,
+      "created_at": "2025-11-17 14:50:52.172149",
+      "assigned_at": "2025-11-17 14:51:17.895805",
+      "started_at": "2025-11-17 14:51:17.956772",
+      "completed_at": "2025-11-17 14:55:49.114949",
+      "error_message": null,
+      "retry_count": 0,
+      "is_multi_action": true,
+      "actions": [
+        {
+          "action_type": "move_to",
+          "target_pose": null,
+          "poi_name": "914e1e7d-fdc6-4e7e-9e0f-bb9b3341df26",
+          "poi_display_name": "PO3",
+          "wait_duration": null,
+          "acceptable_precision": 0.3,
+          "speed_ratio": 1.0
+        },
+        {
+          "action_type": "wait",
+          "target_pose": null,
+          "poi_name": null,
+          "poi_display_name": null,
+          "wait_duration": 180.0,
+          "acceptable_precision": 0.3,
+          "speed_ratio": 1.0
+        },
+        {
+          "action_type": "go_home",
+          "target_pose": null,
+          "poi_name": null,
+          "poi_display_name": null,
+          "wait_duration": null,
+          "acceptable_precision": 0.3,
+          "speed_ratio": 1.0
+        }
+      ],
+      "current_action_index": 3
+    },
+    {
+      "task_id": "32fb30f7-df6f-49de-8ef8-bfc791d7e6fd",
+      "robot_id": "phoebus",
+      "status": "completed",
+      "start_pose": null,
+      "target_pose": {
+        "x": 0.0,
+        "y": 0.0,
+        "z": 0.0,
+        "yaw": 0.0,
+        "pitch": 0.0,
+        "roll": 0.0
+      },
+      "priority": 2,
+      "action_id": 4,
+      "created_at": "2025-11-17 14:51:17.926688",
+      "assigned_at": "2025-11-17 14:51:46.587585",
+      "started_at": "2025-11-17 14:51:47.134463",
+      "completed_at": "2025-11-17 14:56:49.771705",
+      "error_message": null,
+      "retry_count": 0,
+      "is_multi_action": true,
+      "actions": [
+        {
+          "action_type": "move_to",
+          "target_pose": null,
+          "poi_name": "2b3439ab-487f-445a-9842-e3d35d675f3a",
+          "poi_display_name": "PO4",
+          "wait_duration": null,
+          "acceptable_precision": 0.3,
+          "speed_ratio": 1.0
+        },
+        {
+          "action_type": "move_to",
+          "target_pose": null,
+          "poi_name": "128595a5-36e1-485b-a25f-41355e0a0178",
+          "poi_display_name": "P02",
+          "wait_duration": null,
+          "acceptable_precision": 0.3,
+          "speed_ratio": 1.0
+        },
+        {
+          "action_type": "go_home",
+          "target_pose": null,
+          "poi_name": null,
+          "poi_display_name": null,
+          "wait_duration": null,
+          "acceptable_precision": 0.3,
+          "speed_ratio": 1.0
+        }
+      ],
+      "current_action_index": 3
+    },
+    {
+      "task_id": "3e0645f2-1da5-4b8e-b632-8b9958ab1e9a",
+      "robot_id": "p3_1",
+      "status": "completed",
+      "start_pose": null,
+      "target_pose": {
+        "x": 0.0,
+        "y": 0.0,
+        "z": 0.0,
+        "yaw": 0.0,
+        "pitch": 0.0,
+        "roll": 0.0
+      },
+      "priority": 2,
+      "action_id": 216,
+      "created_at": "2025-11-17 14:57:14.807678",
+      "assigned_at": "2025-11-17 14:57:43.080895",
+      "started_at": "2025-11-17 14:57:43.224599",
+      "completed_at": "2025-11-17 15:19:49.942872",
+      "error_message": null,
+      "retry_count": 0,
+      "is_multi_action": true,
+      "actions": [
+        {
+          "action_type": "move_to",
+          "target_pose": null,
+          "poi_name": "914e1e7d-fdc6-4e7e-9e0f-bb9b3341df26",
+          "poi_display_name": "PO3",
+          "wait_duration": null,
+          "acceptable_precision": 0.3,
+          "speed_ratio": 1.0
+        },
+        {
+          "action_type": "wait",
+          "target_pose": null,
+          "poi_name": null,
+          "poi_display_name": null,
+          "wait_duration": 180.0,
+          "acceptable_precision": 0.3,
+          "speed_ratio": 1.0
+        },
+        {
+          "action_type": "go_home",
+          "target_pose": null,
+          "poi_name": null,
+          "poi_display_name": null,
+          "wait_duration": null,
+          "acceptable_precision": 0.3,
+          "speed_ratio": 1.0
+        }
+      ],
+      "current_action_index": 3
+    },
+    {
+      "task_id": "c9074d8b-0b51-472e-8ffc-dec91bb44bd3",
+      "robot_id": "robot1",
+      "status": "failed",
+      "start_pose": null,
+      "target_pose": {
+        "x": 0.0,
+        "y": 0.0,
+        "z": 0.0,
+        "yaw": 0.0,
+        "pitch": 0.0,
+        "roll": 0.0
+      },
+      "priority": 2,
+      "action_id": 15,
+      "created_at": "2025-11-17 14:57:29.611644",
+      "assigned_at": "2025-11-17 14:58:46.465979",
+      "started_at": "2025-11-17 14:58:46.595322",
+      "completed_at": "2025-11-17 15:15:45.052880",
+      "error_message": "CANNOT_REACH_TARGET",
+      "retry_count": 0,
+      "is_multi_action": true,
+      "actions": [
+        {
+          "action_type": "move_to",
+          "target_pose": null,
+          "poi_name": "2b3439ab-487f-445a-9842-e3d35d675f3a",
+          "poi_display_name": "PO4",
+          "wait_duration": null,
+          "acceptable_precision": 0.3,
+          "speed_ratio": 1.0
+        },
+        {
+          "action_type": "move_to",
+          "target_pose": null,
+          "poi_name": "128595a5-36e1-485b-a25f-41355e0a0178",
+          "poi_display_name": "P02",
+          "wait_duration": null,
+          "acceptable_precision": 0.3,
+          "speed_ratio": 1.0
+        },
+        {
+          "action_type": "go_home",
+          "target_pose": null,
+          "poi_name": null,
+          "poi_display_name": null,
+          "wait_duration": null,
+          "acceptable_precision": 0.3,
+          "speed_ratio": 1.0
+        }
+      ],
+      "current_action_index": 0
+    },
+    {
+      "task_id": "bcf7e626-88d1-4c7e-ba28-bf4ad26e9ff3",
+      "robot_id": "phoebus",
+      "status": "failed",
+      "start_pose": null,
+      "target_pose": {
+        "x": 0.0,
+        "y": 0.0,
+        "z": 0.0,
+        "yaw": 0.0,
+        "pitch": 0.0,
+        "roll": 0.0
+      },
+      "priority": 2,
+      "action_id": 6,
+      "created_at": "2025-11-17 14:57:43.469015",
+      "assigned_at": "2025-11-17 14:58:12.899059",
+      "started_at": "2025-11-17 14:58:12.981836",
+      "completed_at": "2025-11-17 15:15:45.162799",
+      "error_message": "CANNOT_REACH_TARGET",
+      "retry_count": 0,
+      "is_multi_action": true,
+      "actions": [
+        {
+          "action_type": "move_to",
+          "target_pose": null,
+          "poi_name": "128595a5-36e1-485b-a25f-41355e0a0178",
+          "poi_display_name": "P02",
+          "wait_duration": null,
+          "acceptable_precision": 0.3,
+          "speed_ratio": 1.0
+        },
+        {
+          "action_type": "move_to",
+          "target_pose": null,
+          "poi_name": "b2e75a8a-249f-45b3-919f-87e3cac23c12",
+          "poi_display_name": "PO7",
+          "wait_duration": null,
+          "acceptable_precision": 0.3,
+          "speed_ratio": 1.0
+        },
+        {
+          "action_type": "go_home",
+          "target_pose": null,
+          "poi_name": null,
+          "poi_display_name": null,
+          "wait_duration": null,
+          "acceptable_precision": 0.3,
+          "speed_ratio": 1.0
+        }
+      ],
+      "current_action_index": 1
+    },
+    {
+      "task_id": "dc009be7-25bc-4cfa-814e-f2a8cfda4dfe",
+      "robot_id": "p3_1",
+      "status": "completed",
+      "start_pose": null,
+      "target_pose": {
+        "x": 8.11,
+        "y": -4.12,
+        "z": 0.0,
+        "yaw": 0.0,
+        "pitch": 0.0,
+        "roll": 0.0
+      },
+      "priority": 2,
+      "action_id": 218,
+      "created_at": "2025-11-17 16:03:03.324772",
+      "assigned_at": "2025-11-17 16:03:37.586945",
+      "started_at": "2025-11-17 16:03:40.342561",
+      "completed_at": "2025-11-17 16:03:45.908465",
+      "error_message": null,
+      "retry_count": 0,
+      "is_multi_action": false,
+      "actions": null,
+      "current_action_index": 0
+    },
+    {
+      "task_id": "31f0fc53-a300-4e03-997a-8a361fa7ef64",
+      "robot_id": "phoebus",
+      "status": "completed",
+      "start_pose": null,
+      "target_pose": {
+        "x": 13.41,
+        "y": -4.12,
+        "z": 0.0,
+        "yaw": 0.0,
+        "pitch": 0.0,
+        "roll": 0.0
+      },
+      "priority": 2,
+      "action_id": 7,
+      "created_at": "2025-11-17 16:03:13.847450",
+      "assigned_at": "2025-11-17 16:03:40.056393",
+      "started_at": "2025-11-17 16:03:40.237797",
+      "completed_at": "2025-11-17 16:03:52.966398",
+      "error_message": null,
+      "retry_count": 0,
+      "is_multi_action": false,
+      "actions": null,
+      "current_action_index": 0
+    },
+    {
+      "task_id": "3c393f49-443f-49ed-b11c-fc47b4a6e7d8",
+      "robot_id": "robot1",
+      "status": "failed",
+      "start_pose": null,
+      "target_pose": {
+        "x": 13.4,
+        "y": -5.46,
+        "z": 0.0,
+        "yaw": 0.0,
+        "pitch": 0.0,
+        "roll": 0.0
+      },
+      "priority": 2,
+      "action_id": 16,
+      "created_at": "2025-11-17 16:03:33.123650",
+      "assigned_at": "2025-11-17 16:04:16.656606",
+      "started_at": "2025-11-17 16:04:16.789132",
+      "completed_at": "2025-11-17 16:05:26.026895",
+      "error_message": "CANNOT_REACH_TARGET",
+      "retry_count": 0,
+      "is_multi_action": false,
+      "actions": null,
+      "current_action_index": 0
+    },
+    {
+      "task_id": "c5c6e534-19e4-410e-97bf-df375257a953",
+      "robot_id": "p3_1",
+      "status": "cancelled",
+      "start_pose": null,
+      "target_pose": {
+        "x": 0.0,
+        "y": 0.0,
+        "z": 0.0,
+        "yaw": 0.0,
+        "pitch": 0.0,
+        "roll": 0.0
+      },
+      "priority": 2,
+      "action_id": 219,
+      "created_at": "2025-11-17 16:07:13.336934",
+      "assigned_at": "2025-11-17 16:07:42.134105",
+      "started_at": "2025-11-17 16:07:42.337238",
+      "completed_at": "2025-11-17 16:07:51.682983",
+      "error_message": null,
+      "retry_count": 0,
+      "is_multi_action": true,
+      "actions": [
+        {
+          "action_type": "move_to",
+          "target_pose": null,
+          "poi_name": "406bc2bd-3f6c-41ec-9afc-f3707efef7b5",
+          "poi_display_name": "P01",
+          "wait_duration": null,
+          "acceptable_precision": 0.3,
+          "speed_ratio": 1.0
+        },
+        {
+          "action_type": "move_to",
+          "target_pose": null,
+          "poi_name": "ad9c3a12-dfe6-4cbb-8c86-531ed509462c",
+          "poi_display_name": "P04",
+          "wait_duration": null,
+          "acceptable_precision": 0.3,
+          "speed_ratio": 1.0
+        },
+        {
+          "action_type": "go_home",
+          "target_pose": null,
+          "poi_name": null,
+          "poi_display_name": null,
+          "wait_duration": null,
+          "acceptable_precision": 0.3,
+          "speed_ratio": 1.0
+        }
+      ],
+      "current_action_index": 0
+    },
+    {
+      "task_id": "30bdf717-2ff5-417f-90e6-72d41c45c869",
+      "robot_id": "phoebus",
+      "status": "failed",
+      "start_pose": null,
+      "target_pose": {
+        "x": 0.0,
+        "y": 0.0,
+        "z": 0.0,
+        "yaw": 0.0,
+        "pitch": 0.0,
+        "roll": 0.0
+      },
+      "priority": 2,
+      "action_id": 11,
+      "created_at": "2025-11-17 16:07:29.341235",
+      "assigned_at": "2025-11-17 16:08:39.539902",
+      "started_at": "2025-11-17 16:08:39.687171",
+      "completed_at": "2025-11-17 16:09:15.924098",
+      "error_message": "DOCK_ID_NOT_FOUND",
+      "retry_count": 0,
+      "is_multi_action": true,
+      "actions": [
+        {
+          "action_type": "move_to",
+          "target_pose": null,
+          "poi_name": "406bc2bd-3f6c-41ec-9afc-f3707efef7b5",
+          "poi_display_name": "P01",
+          "wait_duration": null,
+          "acceptable_precision": 0.3,
+          "speed_ratio": 1.0
+        },
+        {
+          "action_type": "move_to",
+          "target_pose": null,
+          "poi_name": "ad9c3a12-dfe6-4cbb-8c86-531ed509462c",
+          "poi_display_name": "P04",
+          "wait_duration": null,
+          "acceptable_precision": 0.3,
+          "speed_ratio": 1.0
+        },
+        {
+          "action_type": "go_home",
+          "target_pose": null,
+          "poi_name": null,
+          "poi_display_name": null,
+          "wait_duration": null,
+          "acceptable_precision": 0.3,
+          "speed_ratio": 1.0
+        }
+      ],
+      "current_action_index": 2
+    },
+    {
+      "task_id": "e8af5f06-4784-4683-86b3-8115f9dc2e2c",
+      "robot_id": "p3_1",
+      "status": "completed",
+      "start_pose": null,
+      "target_pose": {
+        "x": 0.0,
+        "y": 0.0,
+        "z": 0.0,
+        "yaw": 0.0,
+        "pitch": 0.0,
+        "roll": 0.0
+      },
+      "priority": 2,
+      "action_id": 223,
+      "created_at": "2025-11-17 16:19:45.814143",
+      "assigned_at": "2025-11-17 16:20:04.779926",
+      "started_at": "2025-11-17 16:20:04.965818",
+      "completed_at": "2025-11-17 16:21:10.574481",
+      "error_message": null,
+      "retry_count": 0,
+      "is_multi_action": true,
+      "actions": [
+        {
+          "action_type": "move_to",
+          "target_pose": null,
+          "poi_name": "aeb44a27-9037-4528-ac01-6297f9a18424",
+          "poi_display_name": "P02",
+          "wait_duration": null,
+          "acceptable_precision": 0.3,
+          "speed_ratio": 1.0
+        },
+        {
+          "action_type": "wait",
+          "target_pose": null,
+          "poi_name": null,
+          "poi_display_name": null,
+          "wait_duration": 5.0,
+          "acceptable_precision": 0.3,
+          "speed_ratio": 1.0
+        },
+        {
+          "action_type": "go_home",
+          "target_pose": null,
+          "poi_name": null,
+          "poi_display_name": null,
+          "wait_duration": null,
+          "acceptable_precision": 0.3,
+          "speed_ratio": 1.0
+        }
+      ],
+      "current_action_index": 3
+    },
+    {
+      "task_id": "396452c3-3576-40f1-b1ac-c1267aee5c5d",
+      "robot_id": "robot1",
+      "status": "completed",
+      "start_pose": null,
+      "target_pose": {
+        "x": 0.0,
+        "y": 0.0,
+        "z": 0.0,
+        "yaw": 0.0,
+        "pitch": 0.0,
+        "roll": 0.0
+      },
+      "priority": 2,
+      "action_id": 19,
+      "created_at": "2025-11-17 16:20:29.209385",
+      "assigned_at": "2025-11-17 16:20:48.259400",
+      "started_at": "2025-11-17 16:20:48.516904",
+      "completed_at": "2025-11-17 16:22:07.257189",
+      "error_message": null,
+      "retry_count": 0,
+      "is_multi_action": true,
+      "actions": [
+        {
+          "action_type": "move_to",
+          "target_pose": null,
+          "poi_name": "406bc2bd-3f6c-41ec-9afc-f3707efef7b5",
+          "poi_display_name": "P01",
+          "wait_duration": null,
+          "acceptable_precision": 0.3,
+          "speed_ratio": 1.0
+        },
+        {
+          "action_type": "move_to",
+          "target_pose": null,
+          "poi_name": "68abea05-5535-4fed-ab67-770ea95a91e2",
+          "poi_display_name": "P05",
+          "wait_duration": null,
+          "acceptable_precision": 0.3,
+          "speed_ratio": 1.0
+        },
+        {
+          "action_type": "go_home",
+          "target_pose": null,
+          "poi_name": null,
+          "poi_display_name": null,
+          "wait_duration": null,
+          "acceptable_precision": 0.3,
+          "speed_ratio": 1.0
+        }
+      ],
+      "current_action_index": 3
+    },
+    {
+      "task_id": "b9993917-7450-4b2a-bf93-686b870cb828",
+      "robot_id": "p3_1",
+      "status": "completed",
+      "start_pose": null,
+      "target_pose": {
+        "x": 8.11,
+        "y": -4.12,
+        "z": 0.0,
+        "yaw": 0.0,
+        "pitch": 0.0,
+        "roll": 0.0
+      },
+      "priority": 2,
+      "action_id": 225,
+      "created_at": "2025-11-17 16:22:29.459807",
+      "assigned_at": "2025-11-17 16:22:46.589736",
+      "started_at": "2025-11-17 16:22:46.752403",
+      "completed_at": "2025-11-17 16:22:57.094243",
+      "error_message": null,
+      "retry_count": 0,
+      "is_multi_action": false,
+      "actions": null,
+      "current_action_index": 0
+    },
+    {
+      "task_id": "b46754f7-5405-4bd7-86f2-8644bacb26b2",
+      "robot_id": "phoebus",
+      "status": "completed",
+      "start_pose": null,
+      "target_pose": {
+        "x": 0.0,
+        "y": 0.0,
+        "z": 0.0,
+        "yaw": 0.0,
+        "pitch": 0.0,
+        "roll": 0.0
+      },
+      "priority": 2,
+      "action_id": 14,
+      "created_at": "2025-11-17 16:23:45.558375",
+      "assigned_at": "2025-11-17 16:24:06.815535",
+      "started_at": "2025-11-17 16:24:07.041212",
+      "completed_at": "2025-11-17 16:26:43.660854",
+      "error_message": null,
+      "retry_count": 0,
+      "is_multi_action": true,
+      "actions": [
+        {
+          "action_type": "move_to",
+          "target_pose": null,
+          "poi_name": "bf45a6ec-ec3a-4654-9d45-50f4d89688fe",
+          "poi_display_name": "P10",
+          "wait_duration": null,
+          "acceptable_precision": 0.3,
+          "speed_ratio": 1.0
+        },
+        {
+          "action_type": "move_to",
+          "target_pose": null,
+          "poi_name": "68abea05-5535-4fed-ab67-770ea95a91e2",
+          "poi_display_name": "P05",
+          "wait_duration": null,
+          "acceptable_precision": 0.3,
+          "speed_ratio": 1.0
+        },
+        {
+          "action_type": "go_home",
+          "target_pose": null,
+          "poi_name": null,
+          "poi_display_name": null,
+          "wait_duration": null,
+          "acceptable_precision": 0.3,
+          "speed_ratio": 1.0
+        }
+      ],
+      "current_action_index": 3
+    },
+    {
+      "task_id": "eefbb26b-2926-4873-87c1-a4adab8bca9c",
+      "robot_id": "p3_1",
+      "status": "completed",
+      "start_pose": null,
+      "target_pose": {
+        "x": 0.0,
+        "y": 0.0,
+        "z": 0.0,
+        "yaw": 0.0,
+        "pitch": 0.0,
+        "roll": 0.0
+      },
+      "priority": 2,
+      "action_id": null,
+      "created_at": "2025-11-17 16:28:59.714771",
+      "assigned_at": "2025-11-17 16:29:17.537506",
+      "started_at": "2025-11-17 16:29:17.727607",
+      "completed_at": "2025-11-17 16:30:30.035144",
+      "error_message": null,
+      "retry_count": 0,
+      "is_multi_action": true,
+      "actions": [
+        {
+          "action_type": "move_to",
+          "target_pose": null,
+          "poi_name": "aeb44a27-9037-4528-ac01-6297f9a18424",
+          "poi_display_name": "P02",
+          "wait_duration": null,
+          "acceptable_precision": 0.3,
+          "speed_ratio": 1.0
+        },
+        {
+          "action_type": "wait",
+          "target_pose": null,
+          "poi_name": null,
+          "poi_display_name": null,
+          "wait_duration": 60.0,
+          "acceptable_precision": 0.3,
+          "speed_ratio": 1.0
+        }
+      ],
+      "current_action_index": 2
+    },
+    {
+      "task_id": "38533513-0989-4fd7-9e69-ca8a956536f3",
+      "robot_id": "phoebus",
+      "status": "completed",
+      "start_pose": null,
+      "target_pose": {
+        "x": 0.0,
+        "y": 0.0,
+        "z": 0.0,
+        "yaw": 0.0,
+        "pitch": 0.0,
+        "roll": 0.0
+      },
+      "priority": 2,
+      "action_id": 16,
+      "created_at": "2025-11-17 16:29:22.890294",
+      "assigned_at": "2025-11-17 16:29:45.413438",
+      "started_at": "2025-11-17 16:29:45.549670",
+      "completed_at": "2025-11-17 16:32:42.919432",
+      "error_message": null,
+      "retry_count": 0,
+      "is_multi_action": true,
+      "actions": [
+        {
+          "action_type": "move_to",
+          "target_pose": null,
+          "poi_name": "d143f1de-a37a-44ff-a874-febb560f965a",
+          "poi_display_name": "P09",
+          "wait_duration": null,
+          "acceptable_precision": 0.3,
+          "speed_ratio": 1.0
+        },
+        {
+          "action_type": "move_to",
+          "target_pose": null,
+          "poi_name": "ad9c3a12-dfe6-4cbb-8c86-531ed509462c",
+          "poi_display_name": "P04",
+          "wait_duration": null,
+          "acceptable_precision": 0.3,
+          "speed_ratio": 1.0
+        }
+      ],
+      "current_action_index": 2
+    },
+    {
+      "task_id": "f89dcd11-8e82-4f16-8072-f7daedfaf160",
+      "robot_id": "p3_1",
+      "status": "completed",
+      "start_pose": null,
+      "target_pose": {
+        "x": 0.0,
+        "y": 0.0,
+        "z": 0.0,
+        "yaw": 0.0,
+        "pitch": 0.0,
+        "roll": 0.0
+      },
+      "priority": 2,
+      "action_id": null,
+      "created_at": "2025-11-17 16:35:19.172832",
+      "assigned_at": "2025-11-17 16:35:37.602690",
+      "started_at": "2025-11-17 16:35:38.023468",
+      "completed_at": "2025-11-17 16:35:57.331671",
+      "error_message": null,
+      "retry_count": 0,
+      "is_multi_action": true,
+      "actions": [
+        {
+          "action_type": "move_to",
+          "target_pose": null,
+          "poi_name": "aeb44a27-9037-4528-ac01-6297f9a18424",
+          "poi_display_name": "P02",
+          "wait_duration": null,
+          "acceptable_precision": 0.3,
+          "speed_ratio": 1.0
+        },
+        {
+          "action_type": "wait",
+          "target_pose": null,
+          "poi_name": null,
+          "poi_display_name": null,
+          "wait_duration": 10.0,
+          "acceptable_precision": 0.3,
+          "speed_ratio": 1.0
+        }
+      ],
+      "current_action_index": 2
+    },
+    {
+      "task_id": "473a028a-5ffb-43e6-8b28-51b7c38f548a",
+      "robot_id": "phoebus",
+      "status": "completed",
+      "start_pose": null,
+      "target_pose": {
+        "x": 0.0,
+        "y": 0.0,
+        "z": 0.0,
+        "yaw": 0.0,
+        "pitch": 0.0,
+        "roll": 0.0
+      },
+      "priority": 2,
+      "action_id": 19,
+      "created_at": "2025-11-17 16:35:37.663462",
+      "assigned_at": "2025-11-17 16:36:01.702699",
+      "started_at": "2025-11-17 16:36:02.091264",
+      "completed_at": "2025-11-17 16:37:47.042436",
+      "error_message": null,
+      "retry_count": 0,
+      "is_multi_action": true,
+      "actions": [
+        {
+          "action_type": "move_to",
+          "target_pose": null,
+          "poi_name": "d143f1de-a37a-44ff-a874-febb560f965a",
+          "poi_display_name": "P09",
+          "wait_duration": null,
+          "acceptable_precision": 0.3,
+          "speed_ratio": 1.0
+        },
+        {
+          "action_type": "move_to",
+          "target_pose": null,
+          "poi_name": "68abea05-5535-4fed-ab67-770ea95a91e2",
+          "poi_display_name": "P05",
+          "wait_duration": null,
+          "acceptable_precision": 0.3,
+          "speed_ratio": 1.0
+        }
+      ],
+      "current_action_index": 2
+    },
+    {
+      "task_id": "875be353-2390-4c6a-bc12-3e017e11931f",
+      "robot_id": "p3_1",
+      "status": "cancelled",
+      "start_pose": null,
+      "target_pose": {
+        "x": 10.68,
+        "y": -4.15,
+        "z": 0.0,
+        "yaw": 0.0,
+        "pitch": 0.0,
+        "roll": 0.0
+      },
+      "priority": 2,
+      "action_id": 297,
+      "created_at": "2025-11-17 16:39:04.211443",
+      "assigned_at": "2025-11-17 16:39:21.605028",
+      "started_at": "2025-11-17 16:39:21.894371",
+      "completed_at": "2025-11-17 16:39:25.553010",
+      "error_message": null,
+      "retry_count": 0,
+      "is_multi_action": false,
+      "actions": null,
+      "current_action_index": 0
+    },
+    {
+      "task_id": "5c9512f5-e868-4df2-969d-1c0917da7ecb",
+      "robot_id": "robot1",
+      "status": "completed",
+      "start_pose": null,
+      "target_pose": {
+        "x": 5.72,
+        "y": -4.14,
+        "z": 0.0,
+        "yaw": 0.0,
+        "pitch": 0.0,
+        "roll": 0.0
+      },
+      "priority": 2,
+      "action_id": 69,
+      "created_at": "2025-11-17 16:39:10.176824",
+      "assigned_at": "2025-11-17 16:39:58.538038",
+      "started_at": "2025-11-17 16:39:58.947711",
+      "completed_at": "2025-11-17 16:40:18.390925",
+      "error_message": null,
+      "retry_count": 0,
+      "is_multi_action": false,
+      "actions": null,
+      "current_action_index": 0
+    },
+    {
+      "task_id": "179f2e7a-5196-4529-862f-3e9c456b8b7b",
+      "robot_id": "phoebus",
+      "status": "completed",
+      "start_pose": null,
+      "target_pose": {
+        "x": 3.41,
+        "y": -4.17,
+        "z": 0.0,
+        "yaw": 0.0,
+        "pitch": 0.0,
+        "roll": 0.0
+      },
+      "priority": 2,
+      "action_id": 21,
+      "created_at": "2025-11-17 16:39:15.013815",
+      "assigned_at": "2025-11-17 16:39:38.492406",
+      "started_at": "2025-11-17 16:39:39.551186",
+      "completed_at": "2025-11-17 16:39:40.685364",
+      "error_message": null,
+      "retry_count": 0,
+      "is_multi_action": false,
+      "actions": null,
+      "current_action_index": 0
+    },
+    {
+      "task_id": "ed63b0f1-758e-41e8-a982-e7139ccd159d",
+      "robot_id": "robot1",
+      "status": "completed",
+      "start_pose": null,
+      "target_pose": {
+        "x": 0.0,
+        "y": 0.0,
+        "z": 0.0,
+        "yaw": 0.0,
+        "pitch": 0.0,
+        "roll": 0.0
+      },
+      "priority": 2,
+      "action_id": 72,
+      "created_at": "2025-11-17 16:41:12.801975",
+      "assigned_at": "2025-11-17 16:41:30.100018",
+      "started_at": "2025-11-17 16:41:30.380133",
+      "completed_at": "2025-11-17 16:42:24.350638",
+      "error_message": null,
+      "retry_count": 0,
+      "is_multi_action": true,
+      "actions": [
+        {
+          "action_type": "move_to",
+          "target_pose": null,
+          "poi_name": "5f657782-a3ac-4e50-8c49-4bf405baa8f5",
+          "poi_display_name": "P03",
+          "wait_duration": null,
+          "acceptable_precision": 0.3,
+          "speed_ratio": 1.0
+        },
+        {
+          "action_type": "wait",
+          "target_pose": null,
+          "poi_name": null,
+          "poi_display_name": null,
+          "wait_duration": 5.0,
+          "acceptable_precision": 0.3,
+          "speed_ratio": 1.0
+        },
+        {
+          "action_type": "move_to",
+          "target_pose": null,
+          "poi_name": "ad9c3a12-dfe6-4cbb-8c86-531ed509462c",
+          "poi_display_name": "P04",
+          "wait_duration": null,
+          "acceptable_precision": 0.3,
+          "speed_ratio": 1.0
+        },
+        {
+          "action_type": "go_home",
+          "target_pose": null,
+          "poi_name": null,
+          "poi_display_name": null,
+          "wait_duration": null,
+          "acceptable_precision": 0.3,
+          "speed_ratio": 1.0
+        }
+      ],
+      "current_action_index": 4
+    },
+    {
+      "task_id": "f9aa618b-454e-4c6e-820a-99aa9a7e9e5b",
+      "robot_id": "phoebus",
+      "status": "completed",
+      "start_pose": null,
+      "target_pose": {
+        "x": 0.0,
+        "y": 0.0,
+        "z": 0.0,
+        "yaw": 0.0,
+        "pitch": 0.0,
+        "roll": 0.0
+      },
+      "priority": 2,
+      "action_id": 24,
+      "created_at": "2025-11-17 16:41:29.703932",
+      "assigned_at": "2025-11-17 16:41:49.306290",
+      "started_at": "2025-11-17 16:41:49.406599",
+      "completed_at": "2025-11-17 16:43:04.979186",
+      "error_message": null,
+      "retry_count": 0,
+      "is_multi_action": true,
+      "actions": [
+        {
+          "action_type": "move_to",
+          "target_pose": null,
+          "poi_name": "bb4903e3-f92b-4f8c-910d-772a040d6eb6",
+          "poi_display_name": "P07",
+          "wait_duration": null,
+          "acceptable_precision": 0.3,
+          "speed_ratio": 1.0
+        },
+        {
+          "action_type": "move_to",
+          "target_pose": null,
+          "poi_name": "dbe23af8-5355-43ad-be42-2f939fdbcaa1",
+          "poi_display_name": "P08",
+          "wait_duration": null,
+          "acceptable_precision": 0.3,
+          "speed_ratio": 1.0
+        },
+        {
+          "action_type": "go_home",
+          "target_pose": null,
+          "poi_name": null,
+          "poi_display_name": null,
+          "wait_duration": null,
+          "acceptable_precision": 0.3,
+          "speed_ratio": 1.0
+        }
+      ],
+      "current_action_index": 3
+    },
+    {
+      "task_id": "c49f7eea-90f8-4476-a317-54bcd72f8af4",
+      "robot_id": "p3_1",
+      "status": "completed",
+      "start_pose": null,
+      "target_pose": {
+        "x": 13.34,
+        "y": -6.68,
+        "z": 0.0,
+        "yaw": 0.0,
+        "pitch": 0.0,
+        "roll": 0.0
+      },
+      "priority": 2,
+      "action_id": 326,
+      "created_at": "2025-11-17 16:41:40.636638",
+      "assigned_at": "2025-11-17 16:42:07.282593",
+      "started_at": "2025-11-17 16:42:07.507528",
+      "completed_at": "2025-11-17 16:42:19.090364",
+      "error_message": null,
+      "retry_count": 0,
+      "is_multi_action": false,
+      "actions": null,
+      "current_action_index": 0
+    },
+    {
+      "task_id": "fd50e8fc-9796-42b3-9425-b8ab1b49a0b9",
+      "robot_id": "p3_1",
+      "status": "completed",
+      "start_pose": null,
+      "target_pose": {
+        "x": 8.11,
+        "y": -4.12,
+        "z": 0.0,
+        "yaw": 0.0,
+        "pitch": 0.0,
+        "roll": 0.0
+      },
+      "priority": 2,
+      "action_id": 328,
+      "created_at": "2025-11-17 16:43:34.761626",
+      "assigned_at": "2025-11-17 16:43:53.233799",
+      "started_at": "2025-11-17 16:43:53.405426",
+      "completed_at": "2025-11-17 16:44:10.531209",
+      "error_message": null,
+      "retry_count": 0,
+      "is_multi_action": false,
+      "actions": null,
+      "current_action_index": 0
+    },
+    {
+      "task_id": "b6caeeaf-5ec3-4817-96e4-a2bd9ad2b3fc",
+      "robot_id": "robot1",
+      "status": "completed",
+      "start_pose": null,
+      "target_pose": {
+        "x": 0.0,
+        "y": 0.0,
+        "z": 0.0,
+        "yaw": 0.0,
+        "pitch": 0.0,
+        "roll": 0.0
+      },
+      "priority": 2,
+      "action_id": 90,
+      "created_at": "2025-11-17 16:44:06.253035",
+      "assigned_at": "2025-11-17 16:44:23.805151",
+      "started_at": "2025-11-17 16:44:23.939503",
+      "completed_at": "2025-11-17 16:45:26.498875",
+      "error_message": null,
+      "retry_count": 0,
+      "is_multi_action": true,
+      "actions": [
+        {
+          "action_type": "move_to",
+          "target_pose": null,
+          "poi_name": "ad9c3a12-dfe6-4cbb-8c86-531ed509462c",
+          "poi_display_name": "P04",
+          "wait_duration": null,
+          "acceptable_precision": 0.3,
+          "speed_ratio": 1.0
+        },
+        {
+          "action_type": "move_to",
+          "target_pose": null,
+          "poi_name": "d143f1de-a37a-44ff-a874-febb560f965a",
+          "poi_display_name": "P09",
+          "wait_duration": null,
+          "acceptable_precision": 0.3,
+          "speed_ratio": 1.0
+        }
+      ],
+      "current_action_index": 2
+    },
+    {
+      "task_id": "be820c69-5f72-4909-8108-e4615d5c32dd",
+      "robot_id": "phoebus",
+      "status": "completed",
+      "start_pose": null,
+      "target_pose": {
+        "x": 0.0,
+        "y": 0.0,
+        "z": 0.0,
+        "yaw": 0.0,
+        "pitch": 0.0,
+        "roll": 0.0
+      },
+      "priority": 2,
+      "action_id": 27,
+      "created_at": "2025-11-17 16:44:57.263326",
+      "assigned_at": "2025-11-17 16:45:16.118582",
+      "started_at": "2025-11-17 16:45:16.262655",
+      "completed_at": "2025-11-17 16:46:44.938412",
+      "error_message": null,
+      "retry_count": 0,
+      "is_multi_action": true,
+      "actions": [
+        {
+          "action_type": "move_to",
+          "target_pose": null,
+          "poi_name": "bf45a6ec-ec3a-4654-9d45-50f4d89688fe",
+          "poi_display_name": "P10",
+          "wait_duration": null,
+          "acceptable_precision": 0.3,
+          "speed_ratio": 1.0
+        },
+        {
+          "action_type": "move_to",
+          "target_pose": null,
+          "poi_name": "bb4903e3-f92b-4f8c-910d-772a040d6eb6",
+          "poi_display_name": "P07",
+          "wait_duration": null,
+          "acceptable_precision": 0.3,
+          "speed_ratio": 1.0
+        },
+        {
+          "action_type": "go_home",
+          "target_pose": null,
+          "poi_name": null,
+          "poi_display_name": null,
+          "wait_duration": null,
+          "acceptable_precision": 0.3,
+          "speed_ratio": 1.0
+        }
+      ],
+      "current_action_index": 3
     }
   ],
-  "last_updated": "2025-11-17T00:51:17.452473"
+  "last_updated": "2025-11-17T16:46:44.955959"
 }

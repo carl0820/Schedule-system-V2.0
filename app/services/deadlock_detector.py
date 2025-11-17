@@ -122,8 +122,19 @@ class DeadlockDetector:
             # 饥饿死锁检测配置
             self.starvation_threshold = config.get("starvation_threshold", 60.0)  # 饥饿死锁阈值（秒）- 任务等待时间
             self.starvation_deadlock_threshold = config.get("starvation_deadlock_threshold", 120.0)  # 饥饿死锁触发阈值（秒）
+            
+            # 记录配置加载（仅在初始化时记录，避免日志过多）
+            if not hasattr(self, '_config_loaded'):
+                deadlock_logger.info(
+                    f"Deadlock config loaded: narrow_passage_threshold={self.narrow_passage_threshold}m, "
+                    f"narrow_passage_detection_distance={self.narrow_passage_detection_distance}m, "
+                    f"narrow_passage_deadlock_threshold={self.narrow_passage_deadlock_threshold}s, "
+                    f"narrow_passage_backoff_distance={self.narrow_passage_backoff_distance}m"
+                )
+                self._config_loaded = True
         except Exception as e:
             logger.warning(f"Failed to load config, using defaults: {e}")
+            deadlock_logger.warning(f"Failed to load config, using defaults: {e}")
             # 使用默认值
             self.deadlock_threshold = 10.0
             self.narrow_passage_deadlock_threshold = 3.0
@@ -608,6 +619,13 @@ class DeadlockDetector:
         passage_groups = []  # 每个组是一个窄道中的机器人列表
         processed = set()
         
+        # 记录检测信息（用于调试）
+        deadlock_logger.debug(
+            f"Narrow passage detection: found {len(robots_in_passage)} robots in narrow passages, "
+            f"detection_distance={self.narrow_passage_detection_distance}m, "
+            f"threshold={self.narrow_passage_threshold}m"
+        )
+        
         for robot_id1 in robots_in_passage:
             if robot_id1 in processed:
                 continue
@@ -711,6 +729,10 @@ class DeadlockDetector:
                 
                 wall_info = " (virtual wall detected)" if near_virtual_wall else ""
                 min_width = min([robots_in_passage[rid][1] for rid in group_blocked])
+                deadlock_logger.warning(
+                    f"Narrow passage deadlock detected: {len(group_blocked)} robots "
+                    f"({', '.join(group_blocked)}) in passage (width={min_width:.2f}m){wall_info}"
+                )
                 logger.warning(
                     f"Narrow passage deadlock detected: {len(group_blocked)} robots "
                     f"({', '.join(group_blocked)}) in passage (width={min_width:.2f}m){wall_info}"
@@ -728,24 +750,223 @@ class DeadlockDetector:
         Returns:
             死锁状态列表
         """
-        deadlocks = []
-        
-        # 获取所有机器人ID
-        if robot_ids is None:
-            robot_ids = self.robot_manager.list_robots()
-        
-        # 注意：即使只有1个机器人，也需要检测卡住情况（虽然不是死锁，但需要处理）
-        # 但死锁检测（循环等待、相互阻塞等）需要至少2个机器人
-        
-        # 更新机器人状态历史（所有机器人，包括单个机器人）
-        for robot_id in robot_ids:
-            state = await self.robot_manager.get_robot_state(robot_id)
-            if state and state.status.value in ["idle", "online", "busy"]:
-                self.update_robot_history(robot_id, state.pose)
-        
-        # 如果只有1个机器人，只检测卡住情况，不检测死锁
-        if len(robot_ids) < 2:
-            # 检测单个机器人卡住的情况
+        try:
+            deadlocks = []
+            
+            # 获取所有机器人ID
+            if robot_ids is None:
+                robot_ids = self.robot_manager.list_robots()
+            
+            # 如果没有机器人，直接返回
+            if not robot_ids:
+                return deadlocks
+            
+            # 注意：即使只有1个机器人，也需要检测卡住情况（虽然不是死锁，但需要处理）
+            # 但死锁检测（循环等待、相互阻塞等）需要至少2个机器人
+            
+            # 更新机器人状态历史（所有机器人，包括单个机器人）
+            for robot_id in robot_ids:
+                try:
+                    state = await self.robot_manager.get_robot_state(robot_id)
+                    if state and state.status.value in ["idle", "online", "busy"]:
+                        self.update_robot_history(robot_id, state.pose)
+                except Exception as e:
+                    deadlock_logger.warning(f"[DETECT] Failed to get state for robot {robot_id}: {e}")
+                    continue
+            
+            # 如果只有1个机器人，只检测卡住情况，不检测死锁
+            if len(robot_ids) < 2:
+                # 检测单个机器人卡住的情况
+                stuck_robots = []
+                for robot_id in robot_ids:
+                    if self.check_robot_stuck(robot_id):
+                        stuck_robots.append(robot_id)
+                
+                if stuck_robots:
+                    # 检查是否已经记录了死锁
+                    existing_deadlock = None
+                    for deadlock in self.deadlock_history:
+                        if (deadlock.deadlock_type == "resource_contention" and
+                            set(deadlock.robot_ids) == set(stuck_robots)):
+                            existing_deadlock = deadlock
+                            break
+                    
+                    if existing_deadlock:
+                        # 更新持续时间
+                        existing_deadlock.duration = (datetime.now() - existing_deadlock.start_time).total_seconds()
+                    else:
+                        # 创建新的死锁记录
+                        deadlock = DeadlockState(
+                            robot_ids=stuck_robots,
+                            deadlock_type="resource_contention",
+                            start_time=datetime.now()
+                        )
+                        self.deadlock_history.append(deadlock)
+                        deadlocks.append(deadlock)
+                        deadlock_logger.warning(f"[DETECT] Single robot stuck detected: {stuck_robots}")
+                        logger.warning(f"Single robot stuck detected: {stuck_robots}")
+                
+                # 清理过期的死锁记录
+                self._load_config()
+                now = datetime.now()
+                self.deadlock_history = [
+                    d for d in self.deadlock_history
+                    if (now - d.start_time).total_seconds() < self.history_retention_time
+                ]
+                
+                return deadlocks
+            
+            # 多个机器人：检测各种死锁类型
+            # 记录检测开始（用于验证）- 使用INFO级别
+            if len(robot_ids) >= 2:
+                deadlock_logger.info(
+                    f"[DETECT] Starting deadlock detection for {len(robot_ids)} robots: {robot_ids}"
+                )
+            
+            # 检测循环等待
+            circular_wait = await self.detect_circular_wait(robot_ids)
+            if circular_wait:
+                deadlock_logger.info(f"[DETECT] Circular wait detected: robots {circular_wait}")
+                # 检查是否已经记录了死锁
+                existing_deadlock = None
+                for deadlock in self.deadlock_history:
+                    if (deadlock.deadlock_type == "circular_wait" and
+                        set(deadlock.robot_ids) == set(circular_wait)):
+                        existing_deadlock = deadlock
+                        break
+                
+                if existing_deadlock:
+                    # 更新持续时间
+                    existing_deadlock.duration = (datetime.now() - existing_deadlock.start_time).total_seconds()
+                else:
+                    # 创建新的死锁记录
+                    deadlock = DeadlockState(
+                        robot_ids=circular_wait,
+                        deadlock_type="circular_wait",
+                        start_time=datetime.now()
+                    )
+                    self.deadlock_history.append(deadlock)
+                    deadlocks.append(deadlock)
+                    logger.warning(f"Circular wait deadlock detected: {circular_wait}")
+                    deadlock_logger.warning(
+                        f"[CIRCULAR_WAIT] Detected for robots: {', '.join(circular_wait)}"
+                    )
+            
+            # 检测窄道死锁（包括十字路口和长走廊场景）
+            narrow_passage_deadlock = await self.detect_narrow_passage_deadlock(robot_ids)
+            if narrow_passage_deadlock:
+                deadlock_logger.info(f"[DETECT] Narrow passage deadlock detected: robots {narrow_passage_deadlock}")
+                # 检查是否已经记录了死锁
+                existing_deadlock = None
+                for deadlock in self.deadlock_history:
+                    if (deadlock.deadlock_type == "narrow_passage" and
+                        set(deadlock.robot_ids) == set(narrow_passage_deadlock)):
+                        existing_deadlock = deadlock
+                        break
+                
+                if existing_deadlock:
+                    # 更新持续时间
+                    existing_deadlock.duration = (datetime.now() - existing_deadlock.start_time).total_seconds()
+                else:
+                    # 创建新的死锁记录
+                    deadlock = DeadlockState(
+                        robot_ids=narrow_passage_deadlock,
+                        deadlock_type="narrow_passage",
+                        start_time=datetime.now()
+                    )
+                    self.deadlock_history.append(deadlock)
+                    deadlocks.append(deadlock)
+                    logger.warning(f"Narrow passage deadlock detected: {narrow_passage_deadlock}")
+                    deadlock_logger.warning(
+                        f"[NARROW_PASSAGE] Detected for robots: {', '.join(narrow_passage_deadlock)}"
+                    )
+            
+            # 检测相互阻塞
+            mutual_blocking = await self.detect_mutual_blocking(robot_ids)
+            if mutual_blocking:
+                deadlock_logger.info(f"[DETECT] Mutual blocking detected: robots {mutual_blocking}")
+                # 检查是否已经记录了死锁
+                existing_deadlock = None
+                for deadlock in self.deadlock_history:
+                    if (deadlock.deadlock_type == "mutual_blocking" and
+                        set(deadlock.robot_ids) == set(mutual_blocking)):
+                        existing_deadlock = deadlock
+                        break
+                
+                if existing_deadlock:
+                    # 更新持续时间
+                    existing_deadlock.duration = (datetime.now() - existing_deadlock.start_time).total_seconds()
+                else:
+                    # 创建新的死锁记录
+                    deadlock = DeadlockState(
+                        robot_ids=mutual_blocking,
+                        deadlock_type="mutual_blocking",
+                        start_time=datetime.now()
+                    )
+                    self.deadlock_history.append(deadlock)
+                    deadlocks.append(deadlock)
+                    logger.warning(f"Mutual blocking deadlock detected: {mutual_blocking}")
+                    deadlock_logger.warning(
+                        f"[MUTUAL_BLOCKING] Detected for robots: {', '.join(mutual_blocking)}"
+                    )
+            
+            # 检测活锁（机器人不断移动但无法前进）
+            livelock_robots = await self.detect_livelock(robot_ids)
+            if livelock_robots:
+                # 检查是否已经记录了死锁
+                existing_deadlock = None
+                for deadlock in self.deadlock_history:
+                    if (deadlock.deadlock_type == "livelock" and
+                        set(deadlock.robot_ids) == set(livelock_robots)):
+                        existing_deadlock = deadlock
+                        break
+                
+                if existing_deadlock:
+                    # 更新持续时间
+                    existing_deadlock.duration = (datetime.now() - existing_deadlock.start_time).total_seconds()
+                else:
+                    # 创建新的死锁记录
+                    deadlock = DeadlockState(
+                        robot_ids=livelock_robots,
+                        deadlock_type="livelock",
+                        start_time=datetime.now()
+                    )
+                    self.deadlock_history.append(deadlock)
+                    deadlocks.append(deadlock)
+                    logger.warning(f"Livelock detected: {livelock_robots}")
+                    deadlock_logger.warning(
+                        f"[LIVELOCK] Detected for robots: {', '.join(livelock_robots)}"
+                    )
+            
+            # 检测饥饿死锁（任务等待时间过长）
+            starved_robots = await self.detect_starvation(robot_ids)
+            if starved_robots:
+                # 检查是否已经记录了死锁
+                existing_deadlock = None
+                for deadlock in self.deadlock_history:
+                    if (deadlock.deadlock_type == "starvation" and
+                        set(deadlock.robot_ids) == set(starved_robots)):
+                        existing_deadlock = deadlock
+                        break
+                
+                if existing_deadlock:
+                    # 更新持续时间
+                    existing_deadlock.duration = (datetime.now() - existing_deadlock.start_time).total_seconds()
+                else:
+                    # 创建新的死锁记录
+                    deadlock = DeadlockState(
+                        robot_ids=starved_robots,
+                        deadlock_type="starvation",
+                        start_time=datetime.now()
+                    )
+                    self.deadlock_history.append(deadlock)
+                    deadlocks.append(deadlock)
+                    logger.warning(f"Starvation deadlock detected: {starved_robots}")
+                    deadlock_logger.warning(
+                        f"[STARVATION] Detected for robots: {', '.join(starved_robots)}"
+                    )
+            
+            # 检测卡住的机器人
             stuck_robots = []
             for robot_id in robot_ids:
                 if self.check_robot_stuck(robot_id):
@@ -772,200 +993,32 @@ class DeadlockDetector:
                     )
                     self.deadlock_history.append(deadlock)
                     deadlocks.append(deadlock)
-                    logger.warning(f"Single robot stuck detected: {stuck_robots}")
+                    logger.warning(f"Resource contention deadlock detected: {stuck_robots}")
+                    deadlock_logger.warning(
+                        f"[RESOURCE_CONTENTION] Detected for robots: {', '.join(stuck_robots)}"
+                    )
             
             # 清理过期的死锁记录
-            self._load_config()
+            self._load_config()  # 重新加载配置
             now = datetime.now()
             self.deadlock_history = [
                 d for d in self.deadlock_history
                 if (now - d.start_time).total_seconds() < self.history_retention_time
             ]
             
+            # 如果有检测到的死锁，记录详细信息（即使未超过阈值也记录）
+            if deadlocks:
+                for deadlock in deadlocks:
+                    deadlock_logger.info(
+                        f"[DETECT] Deadlock state: type={deadlock.deadlock_type}, "
+                        f"robots={deadlock.robot_ids}, duration={deadlock.duration:.1f}s"
+                    )
+            
             return deadlocks
-        
-        # 多个机器人：检测各种死锁类型
-        # 检测循环等待
-        circular_wait = await self.detect_circular_wait(robot_ids)
-        if circular_wait:
-            # 检查是否已经记录了死锁
-            existing_deadlock = None
-            for deadlock in self.deadlock_history:
-                if (deadlock.deadlock_type == "circular_wait" and
-                    set(deadlock.robot_ids) == set(circular_wait)):
-                    existing_deadlock = deadlock
-                    break
-            
-            if existing_deadlock:
-                # 更新持续时间
-                existing_deadlock.duration = (datetime.now() - existing_deadlock.start_time).total_seconds()
-            else:
-                # 创建新的死锁记录
-                deadlock = DeadlockState(
-                    robot_ids=circular_wait,
-                    deadlock_type="circular_wait",
-                    start_time=datetime.now()
-                )
-                self.deadlock_history.append(deadlock)
-                deadlocks.append(deadlock)
-                logger.warning(f"Circular wait deadlock detected: {circular_wait}")
-                deadlock_logger.warning(
-                    f"[CIRCULAR_WAIT] Detected for robots: {', '.join(circular_wait)}"
-                )
-        
-        # 检测窄道死锁（包括十字路口和长走廊场景）
-        narrow_passage_deadlock = await self.detect_narrow_passage_deadlock(robot_ids)
-        if narrow_passage_deadlock:
-            # 检查是否已经记录了死锁
-            existing_deadlock = None
-            for deadlock in self.deadlock_history:
-                if (deadlock.deadlock_type == "narrow_passage" and
-                    set(deadlock.robot_ids) == set(narrow_passage_deadlock)):
-                    existing_deadlock = deadlock
-                    break
-            
-            if existing_deadlock:
-                # 更新持续时间
-                existing_deadlock.duration = (datetime.now() - existing_deadlock.start_time).total_seconds()
-            else:
-                # 创建新的死锁记录
-                deadlock = DeadlockState(
-                    robot_ids=narrow_passage_deadlock,
-                    deadlock_type="narrow_passage",
-                    start_time=datetime.now()
-                )
-                self.deadlock_history.append(deadlock)
-                deadlocks.append(deadlock)
-                logger.warning(f"Narrow passage deadlock detected: {narrow_passage_deadlock}")
-                deadlock_logger.warning(
-                    f"[NARROW_PASSAGE] Detected for robots: {', '.join(narrow_passage_deadlock)}"
-                )
-        
-        # 检测相互阻塞
-        mutual_blocking = await self.detect_mutual_blocking(robot_ids)
-        if mutual_blocking:
-            # 检查是否已经记录了死锁
-            existing_deadlock = None
-            for deadlock in self.deadlock_history:
-                if (deadlock.deadlock_type == "mutual_blocking" and
-                    set(deadlock.robot_ids) == set(mutual_blocking)):
-                    existing_deadlock = deadlock
-                    break
-            
-            if existing_deadlock:
-                # 更新持续时间
-                existing_deadlock.duration = (datetime.now() - existing_deadlock.start_time).total_seconds()
-            else:
-                # 创建新的死锁记录
-                deadlock = DeadlockState(
-                    robot_ids=mutual_blocking,
-                    deadlock_type="mutual_blocking",
-                    start_time=datetime.now()
-                )
-                self.deadlock_history.append(deadlock)
-                deadlocks.append(deadlock)
-                logger.warning(f"Mutual blocking deadlock detected: {mutual_blocking}")
-                deadlock_logger.warning(
-                    f"[MUTUAL_BLOCKING] Detected for robots: {', '.join(mutual_blocking)}"
-                )
-        
-        # 检测活锁（机器人不断移动但无法前进）
-        livelock_robots = await self.detect_livelock(robot_ids)
-        if livelock_robots:
-            # 检查是否已经记录了死锁
-            existing_deadlock = None
-            for deadlock in self.deadlock_history:
-                if (deadlock.deadlock_type == "livelock" and
-                    set(deadlock.robot_ids) == set(livelock_robots)):
-                    existing_deadlock = deadlock
-                    break
-            
-            if existing_deadlock:
-                # 更新持续时间
-                existing_deadlock.duration = (datetime.now() - existing_deadlock.start_time).total_seconds()
-            else:
-                # 创建新的死锁记录
-                deadlock = DeadlockState(
-                    robot_ids=livelock_robots,
-                    deadlock_type="livelock",
-                    start_time=datetime.now()
-                )
-                self.deadlock_history.append(deadlock)
-                deadlocks.append(deadlock)
-                logger.warning(f"Livelock detected: {livelock_robots}")
-                deadlock_logger.warning(
-                    f"[LIVELOCK] Detected for robots: {', '.join(livelock_robots)}"
-                )
-        
-        # 检测饥饿死锁（任务等待时间过长）
-        starved_robots = await self.detect_starvation(robot_ids)
-        if starved_robots:
-            # 检查是否已经记录了死锁
-            existing_deadlock = None
-            for deadlock in self.deadlock_history:
-                if (deadlock.deadlock_type == "starvation" and
-                    set(deadlock.robot_ids) == set(starved_robots)):
-                    existing_deadlock = deadlock
-                    break
-            
-            if existing_deadlock:
-                # 更新持续时间
-                existing_deadlock.duration = (datetime.now() - existing_deadlock.start_time).total_seconds()
-            else:
-                # 创建新的死锁记录
-                deadlock = DeadlockState(
-                    robot_ids=starved_robots,
-                    deadlock_type="starvation",
-                    start_time=datetime.now()
-                )
-                self.deadlock_history.append(deadlock)
-                deadlocks.append(deadlock)
-                logger.warning(f"Starvation deadlock detected: {starved_robots}")
-                deadlock_logger.warning(
-                    f"[STARVATION] Detected for robots: {', '.join(starved_robots)}"
-                )
-        
-        # 检测卡住的机器人
-        stuck_robots = []
-        for robot_id in robot_ids:
-            if self.check_robot_stuck(robot_id):
-                stuck_robots.append(robot_id)
-        
-        if stuck_robots:
-            # 检查是否已经记录了死锁
-            existing_deadlock = None
-            for deadlock in self.deadlock_history:
-                if (deadlock.deadlock_type == "resource_contention" and
-                    set(deadlock.robot_ids) == set(stuck_robots)):
-                    existing_deadlock = deadlock
-                    break
-            
-            if existing_deadlock:
-                # 更新持续时间
-                existing_deadlock.duration = (datetime.now() - existing_deadlock.start_time).total_seconds()
-            else:
-                # 创建新的死锁记录
-                deadlock = DeadlockState(
-                    robot_ids=stuck_robots,
-                    deadlock_type="resource_contention",
-                    start_time=datetime.now()
-                )
-                self.deadlock_history.append(deadlock)
-                deadlocks.append(deadlock)
-                logger.warning(f"Resource contention deadlock detected: {stuck_robots}")
-                deadlock_logger.warning(
-                    f"[RESOURCE_CONTENTION] Detected for robots: {', '.join(stuck_robots)}"
-                )
-        
-        # 清理过期的死锁记录
-        self._load_config()  # 重新加载配置
-        now = datetime.now()
-        self.deadlock_history = [
-            d for d in self.deadlock_history
-            if (now - d.start_time).total_seconds() < self.history_retention_time
-        ]
-        
-        return deadlocks
+        except Exception as e:
+            deadlock_logger.error(f"[ERROR] Exception in detect_deadlocks: {e}", exc_info=True)
+            logger.error(f"Exception in detect_deadlocks: {e}", exc_info=True)
+            return []
     
     async def resolve_deadlock(self, deadlock: DeadlockState) -> bool:
         """
@@ -1066,6 +1119,9 @@ class DeadlockDetector:
     
     async def _resolve_narrow_passage_deadlock(self, deadlock: DeadlockState) -> bool:
         """解决窄道死锁：使用实际任务优先级，优先使用等待点（支持多台机器人）"""
+        deadlock_logger.info(
+            f"[UNLOCK] Starting narrow passage deadlock resolution for robots: {deadlock.robot_ids}"
+        )
         # 获取每个机器人对应的任务优先级
         robot_priorities = []
         robot_states = {}
@@ -1179,11 +1235,22 @@ class DeadlockDetector:
                         acceptable_precision=self.backoff_acceptable_precision, 
                         speed_ratio=self.backoff_speed_ratio
                     )
+                    action_id = move_result.action_id if move_result else None
+                    deadlock_logger.info(
+                        f"[UNLOCK] Narrow passage deadlock: robot {robot_id_to_resolve} "
+                        f"(priority={priority_value}) moving to waiting point at "
+                        f"({waiting_point.x:.2f}, {waiting_point.y:.2f}), action_id={action_id}"
+                    )
                     logger.info(
                         f"Resolved narrow passage deadlock: robot {robot_id_to_resolve} "
                         f"(priority={priority_value}) moving to waiting point at "
-                        f"({waiting_point.x:.2f}, {waiting_point.y:.2f}), action_id={move_result.action_id if move_result else 'None'}"
+                        f"({waiting_point.x:.2f}, {waiting_point.y:.2f}), action_id={action_id}"
                     )
+                    if original_task:
+                        deadlock_logger.info(
+                            f"[UNLOCK] Task {original_task.task_id} will be resumed after robot {robot_id_to_resolve} "
+                            f"reaches waiting point (current action_id={action_id})"
+                        )
                     success_count += 1
                 else:
                     # 如果找不到等待点，使用后退策略
@@ -1220,11 +1287,17 @@ class DeadlockDetector:
                 d for d in self.deadlock_history
                 if d != deadlock
             ]
+            deadlock_logger.info(
+                f"[UNLOCK] Narrow passage deadlock resolved: {success_count}/{num_to_resolve} robots moved to waiting points"
+            )
             logger.info(
                 f"Resolved narrow passage deadlock: {success_count}/{num_to_resolve} robots moved"
             )
             return True
         
+        deadlock_logger.warning(
+            f"[UNLOCK] Narrow passage deadlock resolution failed: 0/{num_to_resolve} robots moved"
+        )
         return False
     
     async def _resolve_circular_wait_deadlock(self, deadlock: DeadlockState) -> bool:
@@ -1295,7 +1368,12 @@ class DeadlockDetector:
                     yaw=state.pose.yaw
                 )
                 
-                await agent.move_to(back_pose, mode=0, acceptable_precision=self.backoff_acceptable_precision, speed_ratio=self.backoff_speed_ratio)
+                move_result = await agent.move_to(back_pose, mode=0, acceptable_precision=self.backoff_acceptable_precision, speed_ratio=self.backoff_speed_ratio)
+                action_id = move_result.action_id if move_result else None
+                deadlock_logger.info(
+                    f"[UNLOCK] Circular wait deadlock: robot {robot_id_to_resolve} "
+                    f"(priority={priority_value}) backing up {back_distance}m, action_id={action_id}"
+                )
                 logger.info(
                     f"Resolved circular wait deadlock: robot {robot_id_to_resolve} "
                     f"(priority={priority_value}) backing up {back_distance}m"
@@ -1312,6 +1390,9 @@ class DeadlockDetector:
                 d for d in self.deadlock_history
                 if d != deadlock
             ]
+            deadlock_logger.info(
+                f"[UNLOCK] Circular wait deadlock resolved: {success_count}/{num_to_resolve} robots moved"
+            )
             logger.info(
                 f"✓ Circular wait deadlock resolved: {success_count}/{num_to_resolve} robots moved"
             )
@@ -1321,6 +1402,9 @@ class DeadlockDetector:
     
     async def _resolve_mutual_blocking_deadlock(self, deadlock: DeadlockState) -> bool:
         """解决相互阻塞死锁：优先使用任务优先级，其次考虑距离"""
+        deadlock_logger.info(
+            f"[UNLOCK] Starting mutual blocking deadlock resolution for robots: {deadlock.robot_ids}"
+        )
         logger.info(f"Resolving mutual blocking deadlock for robots: {deadlock.robot_ids}")
         
         if len(deadlock.robot_ids) < 2:
@@ -1452,7 +1536,12 @@ class DeadlockDetector:
                     yaw=state.pose.yaw
                 )
                 
-                await agent.move_to(back_pose, mode=0, acceptable_precision=self.backoff_acceptable_precision, speed_ratio=self.backoff_speed_ratio)
+                move_result = await agent.move_to(back_pose, mode=0, acceptable_precision=self.backoff_acceptable_precision, speed_ratio=self.backoff_speed_ratio)
+                action_id = move_result.action_id if move_result else None
+                deadlock_logger.info(
+                    f"[UNLOCK] Mutual blocking deadlock: robot {robot_id_to_resolve} "
+                    f"(priority={priority_value}) backing up {back_distance}m, action_id={action_id}"
+                )
                 logger.info(
                     f"✓ Successfully moved robot {robot_id_to_resolve} (priority={priority_value}) "
                     f"back {back_distance}m to resolve mutual blocking deadlock"
@@ -1474,12 +1563,19 @@ class DeadlockDetector:
                 if d != deadlock
             ]
             
+            deadlock_logger.info(
+                f"[UNLOCK] Mutual blocking deadlock resolved: {success_count}/{num_to_resolve} robots moved "
+                f"for robots {deadlock.robot_ids}"
+            )
             logger.info(
                 f"✓ Mutual blocking deadlock resolved: {success_count}/{num_to_resolve} robots moved "
                 f"for robots {deadlock.robot_ids}"
             )
             return True
         
+        deadlock_logger.warning(
+            f"[UNLOCK] Mutual blocking deadlock resolution failed: 0/{num_to_resolve} robots moved"
+        )
         return False
     
     async def _resolve_resource_contention_deadlock(self, deadlock: DeadlockState) -> bool:

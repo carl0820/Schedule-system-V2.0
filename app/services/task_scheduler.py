@@ -757,54 +757,86 @@ class TaskScheduler:
                         # 减少日志输出，只在有待分配任务时输出详细信息
                         if pending_tasks:
                             logger.debug(f"Robot {robot_id} status: {state.status.value}")
-                        # 检查机器人状态是否为 IDLE（空闲）或 BUSY（忙碌但可能刚完成死锁解除）
-                        # 注意：死锁解除后机器人可能处于BUSY状态（正在移动到避让点），
-                        # 但如果没有活跃任务，仍然应该考虑分配（因为避让是临时状态）
-                        if state.status == RobotStatus.IDLE or state.status == RobotStatus.BUSY:
+                        # 检查机器人状态是否为 IDLE（空闲）
+                        # 注意：只有空闲状态的机器人才能参与调度
+                        # 忙碌的机器人需要完成任务恢复到空闲状态才能参与调度
+                        if state.status == RobotStatus.IDLE:
+                            # 检查机器人是否有故障（hasError、hasFatal或baseError不为空）- 有故障的机器人不参与调度
+                            # 注意：errorCode为17041920或17042176的错误不影响使用，需要过滤掉
+                            has_error = False
+                            if state.health:
+                                ignored_error_codes = [17041920, 17042176]
+                                has_base_error = False
+                                if state.health.baseError and len(state.health.baseError) > 0:
+                                    # 过滤掉不影响使用的错误码
+                                    significant_errors = [
+                                        err for err in state.health.baseError 
+                                        if isinstance(err, dict) and err.get('errorCode') not in ignored_error_codes
+                                    ]
+                                    has_base_error = len(significant_errors) > 0
+                                has_error = state.health.hasError or state.health.hasFatal or has_base_error
+                            
+                            if has_error:
+                                logger.warning(
+                                    f"Robot {robot_id} has error/fatal issue, skipping task assignment "
+                                    f"(hasError: {state.health.hasError if state.health else False}, "
+                                    f"hasFatal: {state.health.hasFatal if state.health else False})"
+                                )
+                                continue  # 跳过有故障的机器人
+                            
                             # 检查是否有正在执行或已分配的任务（包括ASSIGNED和EXECUTING状态）
+                            # 即使机器人状态是IDLE，如果有活跃任务，也不参与调度
                             has_active_task = any(
                                 t.robot_id == robot_id and 
                                 (t.status == TaskStatus.EXECUTING or t.status == TaskStatus.ASSIGNED)
                                 for t in self.tasks.values()
                             )
-                            if not has_active_task:
-                                # 检查机器人电量（电量低于20%不分配任务）
-                                battery_percentage = state.power.batteryPercentage if state.power else 0
-                                if battery_percentage < 20:
-                                    logger.info(
-                                        f"Robot {robot_id} battery is too low ({battery_percentage}% < 20%), "
-                                        f"skipping task assignment"
-                                    )
-                                else:
-                                    # 检查机器人当前位置是否为障碍物（被人为推到障碍物区域）
-                                    if state.pose:
-                                        is_obstacle = self.path_planner.map_manager.is_obstacle(
-                                            state.pose.x, state.pose.y
-                                        )
-                                        if is_obstacle:
-                                            logger.warning(
-                                                f"Robot {robot_id} is in obstacle area "
-                                                f"({state.pose.x:.2f}, {state.pose.y:.2f}), "
-                                                f"skipping task assignment"
-                                            )
-                                        else:
-                                            available_robots.append((robot_id, state))
-                                            # 减少日志输出，只在有多个待分配任务时输出详细信息
-                                            if len(pending_tasks) > 1:
-                                                logger.debug(
-                                                    f"Robot {robot_id} is available for task assignment "
-                                                    f"(battery: {battery_percentage}%, "
-                                                    f"position: ({state.pose.x:.2f}, {state.pose.y:.2f}))"
-                                                )
-                                    else:
-                                        # 如果没有位置信息，也跳过（可能是离线状态）
-                                        logger.warning(
-                                            f"Robot {robot_id} has no pose information, skipping task assignment"
-                                        )
-                            else:
+                            if has_active_task:
                                 logger.info(f"Robot {robot_id} has active task (ASSIGNED or EXECUTING), skipping")
+                                continue
+                            
+                            # 检查机器人电量（电量低于20%不分配任务）
+                            battery_percentage = state.power.batteryPercentage if state.power else 0
+                            if battery_percentage < 20:
+                                logger.info(
+                                    f"Robot {robot_id} battery is too low ({battery_percentage}% < 20%), "
+                                    f"skipping task assignment"
+                                )
+                                continue
+                            
+                            # 检查机器人当前位置是否为障碍物（被人为推到障碍物区域）
+                            if not state.pose:
+                                logger.warning(
+                                    f"Robot {robot_id} has no pose information, skipping task assignment"
+                                )
+                                continue
+                            
+                            is_obstacle = self.path_planner.map_manager.is_obstacle(
+                                state.pose.x, state.pose.y
+                            )
+                            if is_obstacle:
+                                logger.warning(
+                                    f"Robot {robot_id} is in obstacle area "
+                                    f"({state.pose.x:.2f}, {state.pose.y:.2f}), "
+                                    f"skipping task assignment"
+                                )
+                                continue
+                            
+                            # 所有条件都满足，机器人可以参与调度
+                            available_robots.append((robot_id, state))
+                            # 减少日志输出，只在有多个待分配任务时输出详细信息
+                            if len(pending_tasks) > 1:
+                                logger.debug(
+                                    f"Robot {robot_id} is available for task assignment "
+                                    f"(battery: {battery_percentage}%, "
+                                    f"position: ({state.pose.x:.2f}, {state.pose.y:.2f}))"
+                                )
                         else:
-                            logger.info(f"Robot {robot_id} is not idle (status: {state.status.value}), skipping")
+                            # 非IDLE状态的机器人不参与调度（包括BUSY状态）
+                            if state.status == RobotStatus.BUSY:
+                                logger.debug(f"Robot {robot_id} is busy, must complete task and return to idle before assignment")
+                            else:
+                                logger.debug(f"Robot {robot_id} is not idle (status: {state.status.value}), skipping")
                     else:
                         logger.warning(f"Robot {robot_id} state is None, skipping")
                 
@@ -1382,11 +1414,47 @@ class TaskScheduler:
     
     async def _deadlock_check_loop(self):
         """死锁检测循环"""
-        logger.info("Deadlock check loop started")
+        from app.services.deadlock_detector import deadlock_logger
+        deadlock_logger.info("=" * 80)
+        deadlock_logger.info("Deadlock check loop started")
+        deadlock_logger.info("=" * 80)
+        loop_count = 0
         while True:
             try:
+                loop_count += 1
+                # 每20次循环（10秒）记录一次运行状态
+                if loop_count % 20 == 0:
+                    deadlock_logger.debug(f"Deadlock check loop running (iteration {loop_count})")
+                
                 # 检测死锁
                 deadlocks = await self.deadlock_detector.detect_deadlocks()
+                
+                # 记录检测结果（用于验证）
+                robot_ids = self.robot_manager.list_robots()
+                executing_count = len([
+                    t for t in self.tasks.values()
+                    if t.status.value in ["EXECUTING", "ASSIGNED"]
+                ])
+                
+                # 每10次循环（5秒）记录一次检测状态（INFO级别，确保能看到）
+                if loop_count % 10 == 0:
+                    deadlock_logger.info(
+                        f"[DETECT] Cycle {loop_count}: {len(robot_ids)} robots, "
+                        f"{executing_count} executing tasks, {len(deadlocks)} deadlock(s) detected"
+                    )
+                
+                if deadlocks:
+                    deadlock_logger.info(
+                        f"[DETECT] Found {len(deadlocks)} potential deadlock(s) in this cycle: "
+                        f"{[f'{d.deadlock_type}({d.robot_ids}, duration={d.duration:.1f}s)' for d in deadlocks]}"
+                    )
+                elif executing_count >= 2 and len(robot_ids) >= 2:
+                    # 有多个执行中的任务但没有检测到死锁，说明机器人正常通行
+                    if loop_count % 20 == 0:  # 每10秒记录一次
+                        deadlock_logger.info(
+                            f"[DETECT] No deadlock detected - robots are moving normally "
+                            f"({executing_count} executing tasks, {len(robot_ids)} robots)"
+                        )
                 
                 # 处理死锁
                 for deadlock in deadlocks:
@@ -1412,7 +1480,13 @@ class TaskScheduler:
                         threshold = self.deadlock_detector.starvation_deadlock_threshold
                     
                     # 记录死锁检测信息（即使未超过阈值也记录，便于调试）
+                    from app.services.deadlock_detector import deadlock_logger
                     if deadlock.duration > threshold:
+                        deadlock_logger.warning(
+                            f"Deadlock detected: {deadlock.deadlock_type} "
+                            f"involving robots {deadlock.robot_ids} "
+                            f"(duration: {deadlock.duration:.1f}s, threshold: {threshold:.1f}s) - Attempting to resolve..."
+                        )
                         logger.warning(
                             f"Deadlock detected: {deadlock.deadlock_type} "
                             f"involving robots {deadlock.robot_ids} "
@@ -1422,13 +1496,15 @@ class TaskScheduler:
                         # 尝试解决死锁
                         success = await self.deadlock_detector.resolve_deadlock(deadlock)
                         if success:
+                            deadlock_logger.info(f"✓ Deadlock resolved successfully for robots {deadlock.robot_ids}")
                             logger.info(f"✓ Deadlock resolved successfully for robots {deadlock.robot_ids}")
                         else:
+                            deadlock_logger.error(f"✗ Failed to resolve deadlock for robots {deadlock.robot_ids} - tasks may be cancelled")
                             logger.error(f"✗ Failed to resolve deadlock for robots {deadlock.robot_ids} - tasks may be cancelled")
                     else:
-                        # 记录死锁但未超过阈值的情况（改为INFO级别，便于调试）
-                        logger.info(
-                            f"Deadlock detected but below threshold: {deadlock.deadlock_type} "
+                        # 记录死锁但未超过阈值的情况（INFO级别，确保能看到）
+                        deadlock_logger.info(
+                            f"[DETECT] Deadlock detected but below threshold: {deadlock.deadlock_type} "
                             f"involving robots {deadlock.robot_ids} "
                             f"(duration: {deadlock.duration:.1f}s, threshold: {threshold:.1f}s) - Will resolve when threshold exceeded"
                         )
@@ -1497,6 +1573,11 @@ class TaskScheduler:
                 
                 # 如果距离小于0.5米，认为已到达等待点
                 if distance < 0.5:
+                    from app.services.deadlock_detector import deadlock_logger
+                    deadlock_logger.info(
+                        f"[UNLOCK VERIFY] Robot {robot_id} reached waiting point "
+                        f"(distance={distance:.2f}m < 0.5m), resuming task {task_id}"
+                    )
                     logger.info(
                         f"Robot {robot_id} reached waiting point (distance={distance:.2f}m), "
                         f"resuming task {task_id}"
@@ -1540,6 +1621,11 @@ class TaskScheduler:
             else:
                 # 普通任务：重新发送move_to指令
                 if task.target_pose:
+                    from app.services.deadlock_detector import deadlock_logger
+                    deadlock_logger.info(
+                        f"[UNLOCK VERIFY] Resuming task {task.task_id} for robot {robot_id}, "
+                        f"target=({task.target_pose.x:.2f}, {task.target_pose.y:.2f})"
+                    )
                     logger.info(f"Resuming task {task.task_id} for robot {robot_id}, resending move_to command")
                     move_result = await agent.move_to(
                         task.target_pose,
@@ -1551,6 +1637,10 @@ class TaskScheduler:
                     task.status = TaskStatus.EXECUTING
                     if task.started_at is None:
                         task.started_at = datetime.now()
+                    deadlock_logger.info(
+                        f"[UNLOCK VERIFY] Task {task.task_id} resumed successfully, "
+                        f"new action_id={task.action_id}, status=EXECUTING"
+                    )
                     logger.info(f"Task {task.task_id} resumed, new action_id={task.action_id}")
                 else:
                     logger.warning(f"Task {task.task_id} has no target_pose, cannot resume")

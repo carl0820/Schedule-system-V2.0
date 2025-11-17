@@ -453,9 +453,19 @@ class RobotManager:
                         f"health_fatal={health.hasFatal if health else 'N/A'}, "
                         f"current_action={'None' if not current_action else f'status={current_action.status}'}")
             
-            if health.hasError or health.hasFatal:
-                status = RobotStatus.ERROR
-            elif health.hasSystemEmergencyStop:
+            # 判断机器人状态：有错误、致命错误、系统急停或baseError不为空都视为故障
+            # 注意：errorCode为17041920或17042176的错误不影响使用，需要过滤掉
+            ignored_error_codes = [17041920, 17042176]
+            has_base_error = False
+            if health.baseError and len(health.baseError) > 0:
+                # 过滤掉不影响使用的错误码
+                significant_errors = [
+                    err for err in health.baseError 
+                    if isinstance(err, dict) and err.get('errorCode') not in ignored_error_codes
+                ]
+                has_base_error = len(significant_errors) > 0
+            
+            if health.hasError or health.hasFatal or health.hasSystemEmergencyStop or has_base_error:
                 status = RobotStatus.ERROR
             elif current_action and current_action.status == 1:  # Working (status=1表示正在工作)
                 status = RobotStatus.BUSY

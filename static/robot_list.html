@@ -327,6 +327,20 @@
             background: #218838;
         }
         
+        .btn-sync-map {
+            background: #17a2b8;
+            color: white;
+        }
+        
+        .btn-sync-map:hover {
+            background: #138496;
+        }
+        
+        .btn-sync-map:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        
         /* 模态框样式 */
         .modal {
             display: none;
@@ -444,6 +458,8 @@
             <div class="stat-card">
                 <h3>在线</h3>
                 <div class="value" id="onlineRobots">0</div>
+                <div class="sub-value" id="onlineNormalRobots" style="font-size: 0.8rem; color: #28a745; margin-top: 0.25rem;">正常: 0</div>
+                <div class="sub-value" id="onlineErrorRobots" style="font-size: 0.8rem; color: #dc3545; margin-top: 0.25rem;">故障: 0</div>
             </div>
             <div class="stat-card">
                 <h3>空闲</h3>
@@ -536,13 +552,98 @@
         
         function updateStats() {
             const total = allRobots.length;
-            const online = allRobots.filter(r => r.status === 'online' || r.status === 'idle' || r.status === 'busy').length;
-            const idle = allRobots.filter(r => r.status === 'idle').length;
-            const busy = allRobots.filter(r => r.status === 'busy').length;
-            const offline = allRobots.filter(r => r.status === 'offline').length;
+            
+            // 在线机器人：状态为online/idle/busy/error（包括有故障的）
+            // 注意：error状态的机器人仍然是在线的，只是有故障
+            const onlineRobots = allRobots.filter(r => {
+                const status = r.status ? r.status.toLowerCase() : '';
+                return status === 'online' || status === 'idle' || status === 'busy' || status === 'error';
+            });
+            const online = onlineRobots.length;
+            
+            // 在线且正常的机器人（没有故障）
+            // 注意：errorCode为17041920或17042176的错误不影响使用，需要过滤掉
+            const ignoredErrorCodes = [17041920, 17042176];
+            const onlineNormal = onlineRobots.filter(r => {
+                const status = r.status ? r.status.toLowerCase() : '';
+                const health = r.health || {};
+                // error状态的机器人不算正常，即使health信息可能不完整
+                if (status === 'error') {
+                    return false;
+                }
+                // 检查是否有baseError（过滤掉不影响使用的错误码）
+                let hasBaseError = false;
+                if (health.baseError && Array.isArray(health.baseError) && health.baseError.length > 0) {
+                    const significantErrors = health.baseError.filter(err => 
+                        err && typeof err === 'object' && !ignoredErrorCodes.includes(err.errorCode)
+                    );
+                    hasBaseError = significantErrors.length > 0;
+                }
+                return !health.hasError && !health.hasFatal && !hasBaseError;
+            }).length;
+            
+            // 在线但有故障的机器人（包括error状态和health中有故障的）
+            const onlineError = onlineRobots.filter(r => {
+                const status = r.status ? r.status.toLowerCase() : '';
+                const health = r.health || {};
+                // error状态的机器人直接算作故障
+                if (status === 'error') {
+                    return true;
+                }
+                // 检查是否有baseError（过滤掉不影响使用的错误码）
+                let hasBaseError = false;
+                if (health.baseError && Array.isArray(health.baseError) && health.baseError.length > 0) {
+                    const significantErrors = health.baseError.filter(err => 
+                        err && typeof err === 'object' && !ignoredErrorCodes.includes(err.errorCode)
+                    );
+                    hasBaseError = significantErrors.length > 0;
+                }
+                // 其他状态但有health故障的也算故障
+                return health.hasError || health.hasFatal || hasBaseError;
+            }).length;
+            
+            // 空闲机器人：状态为idle且没有故障（可参与调度）
+            const idle = allRobots.filter(r => {
+                const status = r.status ? r.status.toLowerCase() : '';
+                const health = r.health || {};
+                // 检查是否有baseError（过滤掉不影响使用的错误码）
+                let hasBaseError = false;
+                if (health.baseError && Array.isArray(health.baseError) && health.baseError.length > 0) {
+                    const significantErrors = health.baseError.filter(err => 
+                        err && typeof err === 'object' && !ignoredErrorCodes.includes(err.errorCode)
+                    );
+                    hasBaseError = significantErrors.length > 0;
+                }
+                const hasError = health.hasError || health.hasFatal || hasBaseError;
+                return status === 'idle' && !hasError;
+            }).length;
+            
+            // 忙碌机器人：状态为busy且没有故障（可参与调度）
+            const busy = allRobots.filter(r => {
+                const status = r.status ? r.status.toLowerCase() : '';
+                const health = r.health || {};
+                // 检查是否有baseError（过滤掉不影响使用的错误码）
+                let hasBaseError = false;
+                if (health.baseError && Array.isArray(health.baseError) && health.baseError.length > 0) {
+                    const significantErrors = health.baseError.filter(err => 
+                        err && typeof err === 'object' && !ignoredErrorCodes.includes(err.errorCode)
+                    );
+                    hasBaseError = significantErrors.length > 0;
+                }
+                const hasError = health.hasError || health.hasFatal || hasBaseError;
+                return status === 'busy' && !hasError;
+            }).length;
+            
+            // 离线机器人
+            const offline = allRobots.filter(r => {
+                const status = r.status ? r.status.toLowerCase() : '';
+                return status === 'offline';
+            }).length;
             
             document.getElementById('totalRobots').textContent = total;
             document.getElementById('onlineRobots').textContent = online;
+            document.getElementById('onlineNormalRobots').textContent = `正常: ${onlineNormal}`;
+            document.getElementById('onlineErrorRobots').textContent = `故障: ${onlineError}`;
             document.getElementById('idleRobots').textContent = idle;
             document.getElementById('busyRobots').textContent = busy;
             document.getElementById('offlineRobots').textContent = offline;
@@ -661,6 +762,10 @@
                         </div>
                         <div class="robot-details">
                             <div class="detail-item">
+                                <label>IP地址</label>
+                                <span class="pose-info">${robot.base_url || '未知'}</span>
+                            </div>
+                            <div class="detail-item">
                                 <label>位置</label>
                                 <span class="pose-info">X: ${pose.x.toFixed(3)} | Y: ${pose.y.toFixed(3)}</span>
                             </div>
@@ -678,17 +783,62 @@
                                     ${batteryPercentage}% ${isCharging}
                                 </span>
                             </div>
-                            ${health.hasError || health.hasFatal ? `
-                                <div class="detail-item">
-                                    <label style="color: #dc3545;">警告</label>
-                                    <span style="color: #dc3545; font-weight: 500;">设备异常</span>
-                                </div>
-                            ` : ''}
+                            ${(() => {
+                                // 检查是否有严重错误（影响使用的）
+                                const hasSeriousError = health.hasError || health.hasFatal;
+                                const ignoredErrorCodes = [17041920, 17042176];
+                                let hasSeriousBaseError = false;
+                                let hasReminderBaseError = false;
+                                
+                                if (health.baseError && health.baseError.length > 0) {
+                                    const seriousErrors = health.baseError.filter(err => 
+                                        err && typeof err === 'object' && !ignoredErrorCodes.includes(err.errorCode)
+                                    );
+                                    const reminderErrors = health.baseError.filter(err => 
+                                        err && typeof err === 'object' && ignoredErrorCodes.includes(err.errorCode)
+                                    );
+                                    hasSeriousBaseError = seriousErrors.length > 0;
+                                    hasReminderBaseError = reminderErrors.length > 0;
+                                }
+                                
+                                // 如果有严重错误，显示设备异常
+                                if (hasSeriousError || hasSeriousBaseError) {
+                                    return `
+                                        <div class="detail-item">
+                                            <label style="color: #dc3545;">警告</label>
+                                            <span style="color: #dc3545; font-weight: 500;">设备异常</span>
+                                            ${health.baseError && health.baseError.length > 0 ? `
+                                                <div style="font-size: 0.75rem; color: #dc3545; margin-top: 0.25rem;">
+                                                    ${health.baseError.map(err => err.message || `错误码: ${err.errorCode || 'N/A'}`).join(', ')}
+                                                </div>
+                                            ` : ''}
+                                        </div>
+                                    `;
+                                }
+                                // 如果只有提醒错误（不影响使用），显示为提醒
+                                if (hasReminderBaseError) {
+                                    return `
+                                        <div class="detail-item">
+                                            <label style="color: #ffc107;">提醒</label>
+                                            <span style="color: #ffc107; font-weight: 500;">健康提醒</span>
+                                            <div style="font-size: 0.75rem; color: #ffc107; margin-top: 0.25rem;">
+                                                ${health.baseError.filter(err => 
+                                                    err && typeof err === 'object' && ignoredErrorCodes.includes(err.errorCode)
+                                                ).map(err => err.message || `错误码: ${err.errorCode || 'N/A'}`).join(', ')}
+                                            </div>
+                                        </div>
+                                    `;
+                                }
+                                return '';
+                            })()}
                         </div>
                         <div class="robot-actions">
                             ${status === 'online' || status === 'idle' || status === 'busy' ? `
                                 <button class="btn-small btn-go-home" onclick="goHome('${robot.robot_id}')" id="btn-go-home-${robot.robot_id}">
                                     回桩
+                                </button>
+                                <button class="btn-small btn-sync-map" onclick="syncMap('${robot.robot_id}')" id="btn-sync-map-${robot.robot_id}">
+                                    同步地图
                                 </button>
                             ` : ''}
                             <button class="btn-small btn-delete" onclick="deleteRobot('${robot.robot_id}')" id="btn-delete-${robot.robot_id}">
@@ -734,6 +884,44 @@
                 if (button) {
                     button.disabled = false;
                     button.textContent = '回桩';
+                }
+            }
+        }
+        
+        async function syncMap(robotId) {
+            if (!confirm(`确定要同步机器人 ${robotId} 的地图吗？\n\n这将执行地图持久化保存操作。`)) {
+                return;
+            }
+            
+            const button = document.getElementById(`btn-sync-map-${robotId}`);
+            if (button) {
+                button.disabled = true;
+                button.textContent = '同步中...';
+            }
+            
+            try {
+                const response = await fetch(`${API_BASE}/api/robots/${robotId}/sync-map`, {
+                    method: 'POST'
+                });
+                
+                if (response.ok) {
+                    const data = await response.json();
+                    alert(`机器人 ${robotId} 地图同步成功！\n${data.message || ''}`);
+                    // 刷新数据
+                    refreshData();
+                } else {
+                    const error = await response.json();
+                    alert(`地图同步失败: ${error.detail || '未知错误'}`);
+                    if (button) {
+                        button.disabled = false;
+                        button.textContent = '同步地图';
+                    }
+                }
+            } catch (error) {
+                alert(`地图同步失败: ${error.message}`);
+                if (button) {
+                    button.disabled = false;
+                    button.textContent = '同步地图';
                 }
             }
         }

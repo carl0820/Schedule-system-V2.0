@@ -729,6 +729,10 @@ class MapManager:
         if not map_info:
             return None
         
+        # 在地图信息中添加地图ID，用于前端检测地图变化
+        map_info["map_id"] = default_map.map_id
+        map_info["map_name"] = default_map.name
+        
         # 转换地图数据
         map_data = None
         if self.grid_map is not None:

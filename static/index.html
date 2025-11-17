@@ -77,6 +77,7 @@
             font-size: 0.9rem;
             transition: all 0.2s;
             display: inline-block;
+            user-select: none;
         }
         
         .nav-dropdown-btn:hover {
@@ -89,17 +90,45 @@
             position: absolute;
             top: 100%;
             left: 0;
-            margin-top: 0.25rem;
+            margin-top: 0; /* 消除间隙，避免鼠标移动时触发隐藏 */
+            padding-top: 0.25rem; /* 使用padding代替margin，保持视觉间距 */
             background: white;
             border-radius: 4px;
             box-shadow: 0 4px 12px rgba(0,0,0,0.15);
             min-width: 180px;
             z-index: 1000;
             overflow: hidden;
+            opacity: 0;
+            transform: translateY(-5px);
+            transition: opacity 0.2s, transform 0.2s;
+            pointer-events: none;
         }
         
+        .nav-dropdown-menu.show {
+            display: block;
+            opacity: 1;
+            transform: translateY(0);
+            pointer-events: auto;
+        }
+        
+        /* 保留CSS hover作为备用，但主要使用JavaScript控制 */
         .nav-dropdown:hover .nav-dropdown-menu {
             display: block;
+            opacity: 1;
+            transform: translateY(0);
+            pointer-events: auto;
+        }
+        
+        /* 在按钮和菜单之间添加一个不可见的连接区域，避免鼠标移动时菜单消失 */
+        .nav-dropdown::before {
+            content: '';
+            position: absolute;
+            top: 100%;
+            left: 0;
+            right: 0;
+            height: 0.5rem;
+            background: transparent;
+            z-index: 999;
         }
         
         .nav-dropdown-item {
@@ -549,9 +578,9 @@
                 <a href="task_list.html" class="nav-btn" target="_blank">任务管理</a>
                 <a href="map_management.html" class="nav-btn" target="_blank">地图管理</a>
                 <a href="multi_action_task.html" class="nav-btn" target="_blank">创建多动作任务</a>
-                <div class="nav-dropdown">
-                    <div class="nav-dropdown-btn">参数配置 ▼</div>
-                    <div class="nav-dropdown-menu">
+                <div class="nav-dropdown" id="configDropdown">
+                    <div class="nav-dropdown-btn" id="configDropdownBtn">参数配置 ▼</div>
+                    <div class="nav-dropdown-menu" id="configDropdownMenu">
                         <a href="deadlock_config.html" class="nav-dropdown-item" target="_blank">死锁配置</a>
                     </div>
                 </div>
@@ -650,10 +679,54 @@
         let lastSuccessTime = null; // 最后一次成功的时间
         let lastStatusUpdateTime = 0; // 上次状态更新时间（用于防抖）
         let statusUpdateDebounce = 500; // 状态更新防抖时间（毫秒）
+        let lastRobotPositions = {}; // 上次机器人位置（用于检测移动）
+        let fastRefreshMode = false; // 快速刷新模式（机器人移动时）
+        let fastRefreshCount = 0; // 快速刷新计数（连续快速刷新次数）
+        
+        // 初始化下拉菜单（修复抖动问题）
+        function initDropdown() {
+            const dropdown = document.getElementById('configDropdown');
+            const dropdownBtn = document.getElementById('configDropdownBtn');
+            const dropdownMenu = document.getElementById('configDropdownMenu');
+            
+            if (!dropdown || !dropdownBtn || !dropdownMenu) return;
+            
+            let hideTimeout = null;
+            
+            // 鼠标进入下拉区域
+            dropdown.addEventListener('mouseenter', function() {
+                if (hideTimeout) {
+                    clearTimeout(hideTimeout);
+                    hideTimeout = null;
+                }
+                dropdownMenu.classList.add('show');
+            });
+            
+            // 鼠标离开下拉区域
+            dropdown.addEventListener('mouseleave', function() {
+                // 添加小延迟，避免快速移动时菜单闪烁
+                hideTimeout = setTimeout(function() {
+                    dropdownMenu.classList.remove('show');
+                }, 150);
+            });
+            
+            // 点击按钮也可以切换（可选）
+            dropdownBtn.addEventListener('click', function(e) {
+                e.preventDefault();
+                if (dropdownMenu.classList.contains('show')) {
+                    dropdownMenu.classList.remove('show');
+                } else {
+                    dropdownMenu.classList.add('show');
+                }
+            });
+        }
         
         // 初始化
         window.onload = function() {
             try {
+                // 初始化下拉菜单
+                initDropdown();
+                
                 canvas = document.getElementById('mapCanvas');
                 if (!canvas) {
                     console.error('Canvas element not found');
@@ -697,15 +770,56 @@
         let isRefreshing = false;
         let lastDataHash = null;
         let currentRequestController = null; // 当前请求的控制器
+        let forceMapRefresh = false; // 强制刷新地图标志
+        let lastMapId = null; // 记录上次的地图ID
         
         // 计算数据哈希（简单版本，用于检测变化）
         function getDataHash(data) {
             if (!data) return null;
             const robotsHash = JSON.stringify(data.robots || []).length;
             const tasksHash = JSON.stringify(data.tasks || []).length;
+            // 包含地图ID，确保地图切换时hash值会变化
+            const mapId = data.map && data.map.info ? (data.map.info.map_id || '') : '';
             const mapHash = data.map ? (data.map.info ? JSON.stringify(data.map.info).length : 0) : 0;
-            return `${robotsHash}-${tasksHash}-${mapHash}`;
+            return `${robotsHash}-${tasksHash}-${mapHash}-${mapId}`;
         }
+        
+        // 监听地图变化事件（从地图管理页面）
+        window.addEventListener('message', (event) => {
+            if (event.data && event.data.type === 'mapChanged') {
+                console.log('Map changed detected via postMessage, forcing map refresh');
+                handleMapChange();
+            }
+        });
+        
+        // 处理地图变化的统一函数
+        function handleMapChange() {
+            console.log('Handling map change - clearing cache and forcing refresh');
+            // 清除地图缓存，强制重绘
+            mapImageCache = null;
+            mapImageCacheKey = null;
+            lastDataHash = null; // 清除hash，强制检测为数据变化
+            lastMapId = null; // 清除上次的地图ID
+            forceMapRefresh = true; // 设置强制刷新标志
+            // 立即刷新数据
+            refreshData();
+        }
+        
+        // 检查localStorage中的地图变化标记（用于跨标签页通信）
+        setInterval(() => {
+            const mapChanged = localStorage.getItem('mapChanged');
+            if (mapChanged) {
+                const timestamp = parseInt(mapChanged);
+                const now = Date.now();
+                // 如果标记是最近5秒内的，说明地图刚切换
+                if (now - timestamp < 5000) {
+                    console.log('Map changed detected from localStorage, forcing map refresh');
+                    // 清除标记（在handleMapChange之前清除，避免重复处理）
+                    localStorage.removeItem('mapChanged');
+                    handleMapChange();
+                }
+            }
+        }, 1000); // 每秒检查一次
         
         async function refreshData() {
             // 如果正在刷新，取消之前的请求并开始新的请求
@@ -803,7 +917,22 @@
                 
                 // 检测数据是否变化
                 const currentHash = getDataHash(data);
-                const dataChanged = currentHash !== lastDataHash;
+                const currentMapId = data.map && data.map.info ? (data.map.info.map_id || '') : '';
+                
+                // 检测地图ID是否变化（更可靠的检测方式）
+                const mapIdChanged = currentMapId && currentMapId !== lastMapId;
+                
+                // 如果地图ID变化或强制刷新标志被设置，强制重绘地图
+                if (mapIdChanged || forceMapRefresh) {
+                    console.log(`Map ID changed: ${lastMapId} -> ${currentMapId}, forcing map redraw`);
+                    // 清除地图缓存，确保使用新地图
+                    mapImageCache = null;
+                    mapImageCacheKey = null;
+                    forceMapRefresh = false; // 清除强制刷新标志
+                    lastMapId = currentMapId; // 更新地图ID记录
+                }
+                
+                const dataChanged = currentHash !== lastDataHash || mapIdChanged || forceMapRefresh;
                 lastDataHash = currentHash;
                 
                 mapData = data;
@@ -814,8 +943,73 @@
                 // updateTaskList(data.tasks || []);
                 updatePoiSelector(data.pois || []);
                 
-                // 只在数据变化或首次加载时重绘地图
-                if (dataChanged || !mapImageCache) {
+                // 检测机器人是否在移动（智能刷新策略）
+                const robots = data.robots || [];
+                let anyRobotMoving = false;
+                for (const robot of robots) {
+                    if (robot.pose) {
+                        const robotId = robot.robot_id;
+                        const currentPos = { x: robot.pose.x, y: robot.pose.y };
+                        const lastPos = lastRobotPositions[robotId];
+                        
+                        if (lastPos) {
+                            // 计算位置变化距离
+                            const distance = Math.sqrt(
+                                Math.pow(currentPos.x - lastPos.x, 2) + 
+                                Math.pow(currentPos.y - lastPos.y, 2)
+                            );
+                            // 如果移动超过0.05米（5厘米），认为机器人在移动
+                            if (distance > 0.05) {
+                                anyRobotMoving = true;
+                                break;
+                            }
+                        }
+                        
+                        // 更新位置记录
+                        lastRobotPositions[robotId] = currentPos;
+                    }
+                }
+                
+                // 智能刷新策略：如果机器人在移动，切换到快速刷新模式
+                if (anyRobotMoving) {
+                    if (!fastRefreshMode) {
+                        fastRefreshMode = true;
+                        fastRefreshCount = 0;
+                        console.log('Robot moving detected, switching to fast refresh mode (0.3s)');
+                    }
+                    fastRefreshCount = 0; // 重置计数
+                } else {
+                    // 如果机器人不在移动，逐渐退出快速刷新模式
+                    fastRefreshCount++;
+                    if (fastRefreshMode && fastRefreshCount >= 5) {
+                        // 连续5次（约1.5秒）没有移动，退出快速刷新模式
+                        fastRefreshMode = false;
+                        fastRefreshCount = 0;
+                        console.log('Robot stopped moving, switching back to normal refresh mode (0.5s)');
+                    }
+                }
+                
+                // 调整刷新间隔（进一步优化实时性）
+                if (fastRefreshMode && autoRefreshInterval) {
+                    // 快速刷新模式：0.3秒刷新一次（机器人移动时）
+                    clearInterval(autoRefreshInterval);
+                    autoRefreshInterval = setInterval(() => {
+                        if (!isRefreshing) {
+                            refreshData();
+                        }
+                    }, 300); // 从0.5秒改为0.3秒，进一步提高实时性
+                } else if (!fastRefreshMode && autoRefreshInterval) {
+                    // 正常刷新模式：0.5秒刷新一次（即使静止也保持较高频率）
+                    clearInterval(autoRefreshInterval);
+                    autoRefreshInterval = setInterval(() => {
+                        if (!isRefreshing) {
+                            refreshData();
+                        }
+                    }, 500); // 从1秒改为0.5秒，提高实时性
+                }
+                
+                // 只在数据变化、地图ID变化、强制刷新或首次加载时重绘地图
+                if (dataChanged || !mapImageCache || mapIdChanged) {
                     drawMap();
                     updateZoomInfo();
                 } else {
@@ -1006,8 +1200,9 @@
                     document.getElementById('systemStatus').textContent = '运行中';
                 }
                 // 确保机器人数量正确显示（只计算在线机器人）
+                // 注意：有故障但在线的机器人仍然算作在线（不影响在线数量统计）
                 const robots = data && data.robots ? data.robots : [];
-                // 过滤掉离线机器人，只计算在线机器人
+                // 过滤掉离线机器人，只计算在线机器人（包括有故障但在线的）
                 const onlineRobots = robots.filter(robot => {
                     const status = robot.status ? robot.status.toLowerCase() : '';
                     return status !== 'offline' && status !== 'OFFLINE';
@@ -1189,8 +1384,9 @@
             ctx.fillStyle = '#f0f0f0';
             ctx.fillRect(0, 0, canvas.width, canvas.height);
             
-            // 检查缓存键（地图数据哈希）
-            const cacheKey = `${mapWidth}_${mapHeight}_${mapDataArray.length}`;
+            // 检查缓存键（地图数据哈希，包含地图ID以确保地图切换时清除缓存）
+            const mapId = mapInfo.map_id || '';
+            const cacheKey = `${mapId}_${mapWidth}_${mapHeight}_${mapDataArray.length}`;
             if (mapImageCache && mapImageCacheKey === cacheKey) {
                 // 使用缓存的canvas
                 ctx.drawImage(mapImageCache, offsetX, offsetY, mapWidth * scale, mapHeight * scale);
@@ -1614,16 +1810,19 @@
             if (autoRefreshInterval) {
                 clearInterval(autoRefreshInterval);
                 autoRefreshInterval = null;
+                fastRefreshMode = false; // 重置快速刷新模式
+                fastRefreshCount = 0;
                 document.getElementById('autoRefreshStatus').textContent = '关闭';
             } else {
-                // 降低刷新频率到5秒，减少服务器压力
+                // 优化：提高刷新频率到0.5秒（正常模式），机器人移动时自动切换到0.3秒（快速模式）
                 // 使用函数包装，确保不会在请求进行时触发新的请求
+                const refreshInterval = fastRefreshMode ? 300 : 500; // 根据模式选择间隔
                 autoRefreshInterval = setInterval(() => {
                     // 如果正在刷新，跳过本次刷新
                     if (!isRefreshing) {
                         refreshData();
                     }
-                }, 5000);
+                }, refreshInterval);
                 document.getElementById('autoRefreshStatus').textContent = '开启';
             }
         }

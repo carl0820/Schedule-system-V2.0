@@ -4,6 +4,8 @@
 import logging
 import asyncio
 import math
+import httpx
+from datetime import datetime
 from fastapi import APIRouter, HTTPException, Depends
 from fastapi.responses import Response
 from typing import List, Dict, Optional
@@ -138,93 +140,128 @@ async def get_visualization_data(
         logger.debug(f"Found {len(robot_ids)} robots: {robot_ids}")
         
         async def get_robot_data(robot_id: str):
-            """获取单个机器人的数据（带超时控制，优先使用缓存，快速返回）"""
+            """获取单个机器人的数据（带超时控制，优化实时性）"""
             try:
-                # 优先使用缓存状态，快速返回，不阻塞首页
-                # 使用force_update=False，优先使用缓存的状态（如果缓存足够新）
-                # 超时时间减少到0.3秒，快速失败，确保首页快速加载
-                state = await asyncio.wait_for(
-                    robot_manager.get_robot_state(robot_id, force_update=False),
-                    timeout=0.3  # 进一步减少到0.3秒，快速失败，优先使用缓存
-                )
-                if state and state.pose:
-                    # 机器人有状态和位置
+                # 优化实时性：对于可视化页面，直接获取位置信息，绕过完整状态更新
+                # 这样可以大幅减少延迟，因为只需要位置信息，不需要speed、power、health等
+                agent = robot_manager.get_robot_agent(robot_id)
+                if not agent:
+                    # 如果没有agent，尝试使用缓存状态
+                    if robot_id in robot_manager.robot_states:
+                        state = robot_manager.robot_states[robot_id]
+                        if state and state.pose:
+                            return {
+                                "robot_id": robot_id,
+                                "pose": {
+                                    "x": state.pose.x,
+                                    "y": state.pose.y,
+                                    "yaw": state.pose.yaw
+                                },
+                                "status": state.status.value if hasattr(state.status, 'value') else str(state.status),
+                                "speed": {
+                                    "vx": state.speed.vx if state.speed else 0.0,
+                                    "vy": state.speed.vy if state.speed else 0.0,
+                                    "omega": state.speed.omega if state.speed else 0.0
+                                } if state.speed else {"vx": 0.0, "vy": 0.0, "omega": 0.0},
+                                "power": {
+                                    "batteryPercentage": state.power.batteryPercentage if state.power else 0,
+                                    "isCharging": state.power.isCharging if state.power else False,
+                                    "isDCConnected": state.power.isDCConnected if state.power else False,
+                                    "dockingStatus": state.power.dockingStatus if state.power else "unknown"
+                                } if state.power else {"batteryPercentage": 0, "isCharging": False, "isDCConnected": False, "dockingStatus": "unknown"},
+                                "health": {
+                                    "hasError": state.health.hasError if state.health else False,
+                                    "hasFatal": state.health.hasFatal if state.health else False,
+                                    "hasWarning": state.health.hasWarning if state.health else False,
+                                    "hasSystemEmergencyStop": state.health.hasSystemEmergencyStop if state.health else False,
+                                    "hasLidarDisconnected": state.health.hasLidarDisconnected if state.health else False,
+                                    "hasDepthCameraDisconnected": state.health.hasDepthCameraDisconnected if state.health else False,
+                                    "hasSdpDisconnected": state.health.hasSdpDisconnected if state.health else False,
+                                    "baseError": state.health.baseError if state.health and state.health.baseError else []
+                                } if state.health else {"hasError": False, "hasFatal": False, "hasWarning": False, "hasSystemEmergencyStop": False, "hasLidarDisconnected": False, "hasDepthCameraDisconnected": False, "hasSdpDisconnected": False, "baseError": []}
+                            }
                     return {
                         "robot_id": robot_id,
-                        "pose": {
-                            "x": state.pose.x,
-                            "y": state.pose.y,
-                            "yaw": state.pose.yaw
-                        },
-                        "status": state.status.value if hasattr(state.status, 'value') else str(state.status),
-                        "speed": {
-                            "vx": state.speed.vx if state.speed else 0.0,
-                            "vy": state.speed.vy if state.speed else 0.0,
-                            "omega": state.speed.omega if state.speed else 0.0
-                        } if state.speed else {"vx": 0.0, "vy": 0.0, "omega": 0.0},
-                        "power": {
-                            "batteryPercentage": state.power.batteryPercentage if state.power else 0,
-                            "isCharging": state.power.isCharging if state.power else False,
-                            "isDCConnected": state.power.isDCConnected if state.power else False,
-                            "dockingStatus": state.power.dockingStatus if state.power else "unknown"
-                        } if state.power else {"batteryPercentage": 0, "isCharging": False, "isDCConnected": False, "dockingStatus": "unknown"},
-                        "health": {
-                            "hasError": state.health.hasError if state.health else False,
-                            "hasFatal": state.health.hasFatal if state.health else False,
-                            "hasWarning": state.health.hasWarning if state.health else False,
-                            "hasSystemEmergencyStop": state.health.hasSystemEmergencyStop if state.health else False,
-                            "hasLidarDisconnected": state.health.hasLidarDisconnected if state.health else False,
-                            "hasDepthCameraDisconnected": state.health.hasDepthCameraDisconnected if state.health else False,
-                            "hasSdpDisconnected": state.health.hasSdpDisconnected if state.health else False,
-                            "baseError": state.health.baseError if state.health and state.health.baseError else []
-                        } if state.health else {"hasError": False, "hasFatal": False, "hasWarning": False, "hasSystemEmergencyStop": False, "hasLidarDisconnected": False, "hasDepthCameraDisconnected": False, "hasSdpDisconnected": False, "baseError": []}
-                    }
-                elif state:
-                    # 机器人有状态但没有位置（离线或未定位）
-                    return {
-                        "robot_id": robot_id,
-                        "pose": {
-                            "x": 0.0,
-                            "y": 0.0,
-                            "yaw": 0.0
-                        },
-                        "status": state.status.value if hasattr(state.status, 'value') else str(state.status),
-                        "speed": {
-                            "vx": state.speed.vx if state.speed else 0.0,
-                            "vy": state.speed.vy if state.speed else 0.0,
-                            "omega": state.speed.omega if state.speed else 0.0
-                        } if state.speed else {"vx": 0.0, "vy": 0.0, "omega": 0.0},
-                        "power": {
-                            "batteryPercentage": state.power.batteryPercentage if state.power else 0,
-                            "isCharging": state.power.isCharging if state.power else False,
-                            "isDCConnected": state.power.isDCConnected if state.power else False,
-                            "dockingStatus": state.power.dockingStatus if state.power else "unknown"
-                        } if state.power else {"batteryPercentage": 0, "isCharging": False, "isDCConnected": False, "dockingStatus": "unknown"},
-                        "health": {
-                            "hasError": state.health.hasError if state.health else False,
-                            "hasFatal": state.health.hasFatal if state.health else False,
-                            "hasWarning": state.health.hasWarning if state.health else False,
-                            "hasSystemEmergencyStop": state.health.hasSystemEmergencyStop if state.health else False,
-                            "hasLidarDisconnected": state.health.hasLidarDisconnected if state.health else False,
-                            "hasDepthCameraDisconnected": state.health.hasDepthCameraDisconnected if state.health else False,
-                            "hasSdpDisconnected": state.health.hasSdpDisconnected if state.health else False,
-                            "baseError": state.health.baseError if state.health and state.health.baseError else []
-                        } if state.health else {"hasError": False, "hasFatal": False, "hasWarning": False, "hasSystemEmergencyStop": False, "hasLidarDisconnected": False, "hasDepthCameraDisconnected": False, "hasSdpDisconnected": False, "baseError": []}
-                    }
-                else:
-                    # 如果无法获取状态，仍然包含机器人（离线状态）
-                    return {
-                        "robot_id": robot_id,
-                        "pose": {
-                            "x": 0.0,
-                            "y": 0.0,
-                            "yaw": 0.0
-                        },
+                        "pose": {"x": 0.0, "y": 0.0, "yaw": 0.0},
                         "status": "offline",
                         "speed": {"vx": 0.0, "vy": 0.0, "omega": 0.0},
                         "power": {"batteryPercentage": 0, "isCharging": False, "isDCConnected": False, "dockingStatus": "unknown"},
                         "health": {"hasError": False, "hasFatal": False, "hasWarning": False, "hasSystemEmergencyStop": False, "hasLidarDisconnected": False, "hasDepthCameraDisconnected": False, "hasSdpDisconnected": False, "baseError": []}
                     }
+                
+                # 快速路径：直接获取位置信息（只调用pose API，不调用其他API）
+                # 使用非常短的超时时间（0.2秒），快速失败，绕过重试机制
+                try:
+                    # 直接调用底层API，绕过get_pose()的重试机制，使用最短超时
+                    import httpx
+                    pose_url = f"{agent.base_url}/api/core/slam/v1/localization/pose"
+                    # 使用极短的超时时间，快速失败
+                    quick_timeout = httpx.Timeout(timeout=0.2, connect=0.2, read=0.2)
+                    async with httpx.AsyncClient(timeout=quick_timeout, verify=False) as quick_client:
+                        response = await quick_client.get(pose_url, timeout=quick_timeout)
+                        response.raise_for_status()
+                        pose_data = response.json()
+                        from app.models.robot import Pose
+                        pose = Pose(**pose_data)
+                except (asyncio.TimeoutError, httpx.TimeoutException):
+                    logger.debug(f"Timeout getting pose for robot {robot_id} (0.2s), using cached state")
+                    pose = None
+                except Exception as e:
+                    logger.debug(f"Failed to get pose for robot {robot_id}: {e}, using cached state")
+                    pose = None
+                
+                # 获取缓存状态作为基础（用于其他信息）
+                cached_state = robot_manager.robot_states.get(robot_id)
+                
+                # 如果成功获取到新位置，更新缓存中的位置信息
+                if pose and cached_state:
+                    cached_state.pose = pose
+                    cached_state.last_update_time = datetime.now()
+                
+                # 使用最新位置或缓存位置
+                final_pose = pose if pose else (cached_state.pose if cached_state else None)
+                
+                if final_pose:
+                    return {
+                        "robot_id": robot_id,
+                        "pose": {
+                            "x": final_pose.x,
+                            "y": final_pose.y,
+                            "yaw": final_pose.yaw
+                        },
+                        "status": cached_state.status.value if cached_state and hasattr(cached_state.status, 'value') else (str(cached_state.status) if cached_state else "online"),
+                        "speed": {
+                            "vx": cached_state.speed.vx if cached_state and cached_state.speed else 0.0,
+                            "vy": cached_state.speed.vy if cached_state and cached_state.speed else 0.0,
+                            "omega": cached_state.speed.omega if cached_state and cached_state.speed else 0.0
+                        } if cached_state and cached_state.speed else {"vx": 0.0, "vy": 0.0, "omega": 0.0},
+                        "power": {
+                            "batteryPercentage": cached_state.power.batteryPercentage if cached_state and cached_state.power else 0,
+                            "isCharging": cached_state.power.isCharging if cached_state and cached_state.power else False,
+                            "isDCConnected": cached_state.power.isDCConnected if cached_state and cached_state.power else False,
+                            "dockingStatus": cached_state.power.dockingStatus if cached_state and cached_state.power else "unknown"
+                        } if cached_state and cached_state.power else {"batteryPercentage": 0, "isCharging": False, "isDCConnected": False, "dockingStatus": "unknown"},
+                        "health": {
+                            "hasError": cached_state.health.hasError if cached_state and cached_state.health else False,
+                            "hasFatal": cached_state.health.hasFatal if cached_state and cached_state.health else False,
+                            "hasWarning": cached_state.health.hasWarning if cached_state and cached_state.health else False,
+                            "hasSystemEmergencyStop": cached_state.health.hasSystemEmergencyStop if cached_state and cached_state.health else False,
+                            "hasLidarDisconnected": cached_state.health.hasLidarDisconnected if cached_state and cached_state.health else False,
+                            "hasDepthCameraDisconnected": cached_state.health.hasDepthCameraDisconnected if cached_state and cached_state.health else False,
+                            "hasSdpDisconnected": cached_state.health.hasSdpDisconnected if cached_state and cached_state.health else False,
+                            "baseError": cached_state.health.baseError if cached_state and cached_state.health and cached_state.health.baseError else []
+                        } if cached_state and cached_state.health else {"hasError": False, "hasFatal": False, "hasWarning": False, "hasSystemEmergencyStop": False, "hasLidarDisconnected": False, "hasDepthCameraDisconnected": False, "hasSdpDisconnected": False, "baseError": []}
+                    }
+                
+                # 如果没有位置信息，返回离线状态
+                return {
+                    "robot_id": robot_id,
+                    "pose": {"x": 0.0, "y": 0.0, "yaw": 0.0},
+                    "status": "offline",
+                    "speed": {"vx": 0.0, "vy": 0.0, "omega": 0.0},
+                    "power": {"batteryPercentage": 0, "isCharging": False, "isDCConnected": False, "dockingStatus": "unknown"},
+                    "health": {"hasError": False, "hasFatal": False, "hasWarning": False, "hasSystemEmergencyStop": False, "hasLidarDisconnected": False, "hasDepthCameraDisconnected": False, "hasSdpDisconnected": False, "baseError": []}
+                }
             except asyncio.TimeoutError:
                 logger.debug(f"Timeout getting state for robot {robot_id} (0.3s), using cached state")
                 # 尝试使用缓存的状态（即使过期），快速返回

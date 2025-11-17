@@ -50,7 +50,7 @@
     "name": "杨浦5F",
     "description": "增加了虚拟墙在P3的地图，用来模拟窄道测试死锁功能",
     "robot_id": "p3_1",
-    "is_default": true,
+    "is_default": false,
     "created_at": "2025-11-14T21:59:03.228765",
     "updated_at": "2025-11-14T21:59:03.228765",
     "file_path": "d50e98ed-5ca7-49fb-adda-d8044ae4f56a.bin.gz",
@@ -65,6 +65,29 @@
       "min_y": -14.100018501281738,
       "max_x": 31.099993601441383,
       "max_y": 11.69998188316822
+    },
+    "file_size": 456180
+  },
+  "2a1bc123-565c-423d-b52c-a1ebea4d9346": {
+    "map_id": "2a1bc123-565c-423d-b52c-a1ebea4d9346",
+    "name": "杨浦5F_phoebus",
+    "description": null,
+    "robot_id": "phoebus",
+    "is_default": true,
+    "created_at": "2025-11-17T15:50:31.480201",
+    "updated_at": "2025-11-17T15:50:31.480201",
+    "file_path": "2a1bc123-565c-423d-b52c-a1ebea4d9346.bin.gz",
+    "thumbnail_path": null,
+    "metadata": {
+      "width": 884,
+      "height": 516,
+      "resolution": 0.05000000074505806,
+      "origin_x": -13.099996566772461,
+      "origin_y": -14.099996566772461,
+      "min_x": -13.099996566772461,
+      "min_y": -14.099996566772461,
+      "max_x": 31.100004091858864,
+      "max_y": 11.700003817677498
     },
     "file_size": 456180
   }

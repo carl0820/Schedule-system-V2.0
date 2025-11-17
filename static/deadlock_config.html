@@ -347,21 +347,40 @@
                 
                 const response = await fetch(`${API_BASE}/api/system/config/deadlock`);
                 if (!response.ok) {
-                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                    const errorText = await response.text();
+                    let errorMessage = `HTTP ${response.status}: ${response.statusText}`;
+                    try {
+                        const errorJson = JSON.parse(errorText);
+                        errorMessage = errorJson.detail || errorMessage;
+                    } catch (e) {
+                        // 如果无法解析JSON，使用原始错误文本
+                        if (errorText) {
+                            errorMessage = errorText;
+                        }
+                    }
+                    throw new Error(errorMessage);
                 }
                 
                 const data = await response.json();
-                if (data.success) {
+                if (data.success && data.config) {
                     currentConfig = data.config;
                     populateForm(currentConfig);
                     document.getElementById('loadingIndicator').classList.add('hidden');
                     document.getElementById('configForm').classList.remove('hidden');
                 } else {
-                    throw new Error('Failed to load config');
+                    throw new Error(data.message || 'Failed to load config: Invalid response format');
                 }
             } catch (error) {
+                console.error('Failed to load config:', error);
                 showAlert('加载配置失败: ' + error.message, 'error');
+                // 即使加载失败，也显示表单（使用空值或默认值）
+                // 这样用户至少可以看到页面内容
                 document.getElementById('loadingIndicator').classList.add('hidden');
+                document.getElementById('configForm').classList.remove('hidden');
+                // 尝试使用空配置填充表单，至少让页面可见
+                if (Object.keys(currentConfig).length === 0) {
+                    populateForm({});
+                }
             }
         }
         
@@ -387,11 +406,21 @@
                 const input = document.getElementById(field);
                 const currentValueDiv = document.getElementById(field + '_current');
                 
-                if (input && config[field] !== undefined) {
-                    input.value = config[field];
-                    if (currentValueDiv) {
-                        currentValueDiv.textContent = `当前值: ${config[field]}`;
+                if (input) {
+                    if (config[field] !== undefined && config[field] !== null) {
+                        input.value = config[field];
+                        if (currentValueDiv) {
+                            currentValueDiv.textContent = `当前值: ${config[field]}`;
+                        }
+                    } else {
+                        // 如果配置中没有该字段，保持输入框为空，但显示提示
+                        if (currentValueDiv) {
+                            currentValueDiv.textContent = '未设置';
+                            currentValueDiv.style.color = '#999';
+                        }
                     }
+                } else {
+                    console.warn(`Input field not found: ${field}`);
                 }
             });
         }
@@ -399,21 +428,33 @@
         async function saveConfig() {
             try {
                 // 收集表单数据
-                const configUpdate = {
-                    deadlock_threshold: parseFloat(document.getElementById('deadlock_threshold').value),
-                    narrow_passage_threshold: parseFloat(document.getElementById('narrow_passage_threshold').value),
-                    narrow_passage_backoff_distance: parseFloat(document.getElementById('narrow_passage_backoff_distance').value),
-                    circular_wait_backoff_distance: parseFloat(document.getElementById('circular_wait_backoff_distance').value),
-                    mutual_blocking_backoff_distance: parseFloat(document.getElementById('mutual_blocking_backoff_distance').value),
-                    default_backoff_distance: parseFloat(document.getElementById('default_backoff_distance').value),
-                    backoff_speed_ratio: parseFloat(document.getElementById('backoff_speed_ratio').value),
-                    backoff_acceptable_precision: parseFloat(document.getElementById('backoff_acceptable_precision').value),
-                    robot_stuck_threshold: parseFloat(document.getElementById('robot_stuck_threshold').value),
-                    robot_stuck_time_window: parseFloat(document.getElementById('robot_stuck_time_window').value),
-                    mutual_blocking_distance: parseFloat(document.getElementById('mutual_blocking_distance').value),
-                    narrow_passage_detection_distance: parseFloat(document.getElementById('narrow_passage_detection_distance').value),
-                    history_retention_time: parseFloat(document.getElementById('history_retention_time').value)
-                };
+                const fields = [
+                    'deadlock_threshold',
+                    'narrow_passage_threshold',
+                    'narrow_passage_backoff_distance',
+                    'circular_wait_backoff_distance',
+                    'mutual_blocking_backoff_distance',
+                    'default_backoff_distance',
+                    'backoff_speed_ratio',
+                    'backoff_acceptable_precision',
+                    'robot_stuck_threshold',
+                    'robot_stuck_time_window',
+                    'mutual_blocking_distance',
+                    'narrow_passage_detection_distance',
+                    'history_retention_time'
+                ];
+                
+                const configUpdate = {};
+                for (const field of fields) {
+                    const input = document.getElementById(field);
+                    if (input && input.value.trim() !== '') {
+                        const value = parseFloat(input.value);
+                        if (isNaN(value)) {
+                            throw new Error(`字段 ${field} 的值无效: ${input.value}`);
+                        }
+                        configUpdate[field] = value;
+                    }
+                }
                 
                 // 验证数据
                 for (const [key, value] of Object.entries(configUpdate)) {
@@ -425,6 +466,10 @@
                     }
                 }
                 
+                if (Object.keys(configUpdate).length === 0) {
+                    throw new Error('没有要保存的配置项');
+                }
+                
                 const response = await fetch(`${API_BASE}/api/system/config/deadlock`, {
                     method: 'PUT',
                     headers: {
@@ -434,8 +479,17 @@
                 });
                 
                 if (!response.ok) {
-                    const error = await response.json();
-                    throw new Error(error.detail || `HTTP ${response.status}: ${response.statusText}`);
+                    const errorText = await response.text();
+                    let errorMessage = `HTTP ${response.status}: ${response.statusText}`;
+                    try {
+                        const errorJson = JSON.parse(errorText);
+                        errorMessage = errorJson.detail || errorMessage;
+                    } catch (e) {
+                        if (errorText) {
+                            errorMessage = errorText;
+                        }
+                    }
+                    throw new Error(errorMessage);
                 }
                 
                 const data = await response.json();
@@ -444,9 +498,10 @@
                     // 重新加载配置以更新当前值显示
                     setTimeout(() => loadConfig(), 1000);
                 } else {
-                    throw new Error('保存失败');
+                    throw new Error(data.message || '保存失败');
                 }
             } catch (error) {
+                console.error('Failed to save config:', error);
                 showAlert('保存配置失败: ' + error.message, 'error');
             }
         }
@@ -462,8 +517,17 @@
                 });
                 
                 if (!response.ok) {
-                    const error = await response.json();
-                    throw new Error(error.detail || `HTTP ${response.status}: ${response.statusText}`);
+                    const errorText = await response.text();
+                    let errorMessage = `HTTP ${response.status}: ${response.statusText}`;
+                    try {
+                        const errorJson = JSON.parse(errorText);
+                        errorMessage = errorJson.detail || errorMessage;
+                    } catch (e) {
+                        if (errorText) {
+                            errorMessage = errorText;
+                        }
+                    }
+                    throw new Error(errorMessage);
                 }
                 
                 const data = await response.json();
@@ -471,9 +535,10 @@
                     showAlert('配置已重置为默认值！', 'success');
                     setTimeout(() => loadConfig(), 1000);
                 } else {
-                    throw new Error('重置失败');
+                    throw new Error(data.message || '重置失败');
                 }
             } catch (error) {
+                console.error('Failed to reset config:', error);
                 showAlert('重置配置失败: ' + error.message, 'error');
             }
         }

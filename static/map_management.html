@@ -438,6 +438,13 @@
                 if (response.ok) {
                     showAlert('默认地图设置成功', 'success');
                     loadMaps();
+                    
+                    // 通知首页刷新地图（通过localStorage）
+                    localStorage.setItem('mapChanged', Date.now().toString());
+                    // 如果首页窗口存在，触发刷新
+                    if (window.opener && !window.opener.closed) {
+                        window.opener.postMessage({ type: 'mapChanged', mapId: mapId }, '*');
+                    }
                 } else {
                     const error = await response.json();
                     showAlert(`设置失败: ${error.detail || '未知错误'}`, 'error');

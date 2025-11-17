@@ -355,6 +355,47 @@ async def go_home(
         raise HTTPException(status_code=500, detail=f"Failed to send robot home: {str(e)}")
 
 
+@router.post("/{robot_id}/sync-map", response_model=dict)
+async def sync_map(
+    robot_id: str,
+    robot_manager: RobotManager = Depends(get_robot_manager)
+):
+    """
+    同步机器人地图（地图持久化保存）
+    
+    Args:
+        robot_id: 机器人ID
+        
+    Returns:
+        同步地图操作结果
+    """
+    logger.info(f"Received sync-map request for robot: {robot_id}")
+    try:
+        agent = robot_manager.get_robot_agent(robot_id)
+        if not agent:
+            logger.warning(f"Robot {robot_id} not found in robot_manager")
+            raise HTTPException(status_code=404, detail=f"Robot {robot_id} not found")
+        
+        logger.info(f"Syncing map for robot {robot_id}, base_url: {agent.base_url}")
+        # 调用机器人同步地图
+        success = await agent.sync_map()
+        if success:
+            logger.info(f"Robot {robot_id} map sync completed successfully")
+            return {
+                "success": True,
+                "robot_id": robot_id,
+                "message": f"Robot {robot_id} map synchronized successfully"
+            }
+        else:
+            logger.error(f"Robot {robot_id} map sync failed")
+            raise HTTPException(status_code=500, detail="Map sync failed")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to sync map for robot {robot_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to sync map: {str(e)}")
+
+
 @router.get("/{robot_id}/state")
 async def get_robot_state(
     robot_id: str,
@@ -518,11 +559,16 @@ async def get_all_robots_states(
                     timeout=5.0
                 )
             
+            # 获取机器人的base_url（IP地址）
+            agent = robot_manager.get_robot_agent(robot_id)
+            base_url = agent.base_url if agent else None
+            
             # 如果使用缓存，直接返回（不需要后续处理）
             if use_cache and state:
                 status = state.status.value if isinstance(state.status, RobotStatus) else str(state.status)
                 return {
                     "robot_id": robot_id,
+                    "base_url": base_url,  # 添加IP地址
                     "pose": {
                         "x": state.pose.x if state.pose else 0.0,
                         "y": state.pose.y if state.pose else 0.0,
@@ -554,6 +600,7 @@ async def get_all_robots_states(
             if not state:
                 return {
                     "robot_id": robot_id,
+                    "base_url": base_url,  # 添加IP地址
                     "pose": {"x": 0.0, "y": 0.0, "yaw": 0.0},
                     "status": "offline",
                     "speed": {"vx": 0.0, "vy": 0.0, "omega": 0.0},
@@ -566,6 +613,7 @@ async def get_all_robots_states(
             
             return {
                 "robot_id": robot_id,
+                "base_url": base_url,  # 添加IP地址
                 "pose": {
                     "x": state.pose.x if state.pose else 0.0,
                     "y": state.pose.y if state.pose else 0.0,
@@ -595,6 +643,10 @@ async def get_all_robots_states(
                 }
             }
         except asyncio.TimeoutError:
+            # 获取机器人的base_url（IP地址）
+            agent = robot_manager.get_robot_agent(robot_id)
+            base_url = agent.base_url if agent else None
+            
             # 超时，尝试使用缓存的状态
             if robot_id in robot_manager.robot_states:
                 state = robot_manager.robot_states[robot_id]
@@ -602,6 +654,7 @@ async def get_all_robots_states(
                     status = state.status.value if isinstance(state.status, RobotStatus) else str(state.status)
                     return {
                         "robot_id": robot_id,
+                        "base_url": base_url,  # 添加IP地址
                         "pose": {
                             "x": state.pose.x if state.pose else 0.0,
                             "y": state.pose.y if state.pose else 0.0,
@@ -633,6 +686,7 @@ async def get_all_robots_states(
             # 如果没有缓存，返回离线状态
             return {
                 "robot_id": robot_id,
+                "base_url": base_url,  # 添加IP地址
                 "pose": {"x": 0.0, "y": 0.0, "yaw": 0.0},
                 "status": "offline",
                 "speed": {"vx": 0.0, "vy": 0.0, "omega": 0.0},
@@ -641,8 +695,13 @@ async def get_all_robots_states(
             }
         except Exception as e:
             logger.debug(f"Failed to get state for robot {robot_id}: {e}")
+            # 获取机器人的base_url（IP地址）
+            agent = robot_manager.get_robot_agent(robot_id)
+            base_url = agent.base_url if agent else None
+            
             return {
                 "robot_id": robot_id,
+                "base_url": base_url,  # 添加IP地址
                 "pose": {"x": 0.0, "y": 0.0, "yaw": 0.0},
                 "status": "offline",
                 "speed": {"vx": 0.0, "vy": 0.0, "omega": 0.0},
