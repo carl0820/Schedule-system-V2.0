@@ -32,9 +32,15 @@ Write-Host ""
 
 # Try to access the service
 try {
-    $response = Invoke-WebRequest -Uri "http://localhost:8000/api/health" -TimeoutSec 2 -ErrorAction Stop
+    $response = Invoke-WebRequest -Uri "http://localhost:8000/health" -TimeoutSec 2 -ErrorAction Stop
     Write-Host "[OK] Service is responding" -ForegroundColor Green
     Write-Host "  Status: $($response.StatusCode)" -ForegroundColor Cyan
+    try {
+        $health = $response.Content | ConvertFrom-Json
+        Write-Host "  Health: $($health.status)" -ForegroundColor Cyan
+    } catch {
+        Write-Host "  Response: $($response.Content.Substring(0, [Math]::Min(100, $response.Content.Length)))" -ForegroundColor Gray
+    }
 } catch {
     Write-Host "[ERROR] Service is not responding" -ForegroundColor Red
     Write-Host "  Error: $($_.Exception.Message)" -ForegroundColor Red

@@ -107,8 +107,12 @@ try {
         
         # Try to check service health
         try {
-            $response = Invoke-RestMethod -Uri "http://localhost:8000/api/health" -TimeoutSec 2 -ErrorAction SilentlyContinue
-            Write-Host "[OK] Service health check: OK" -ForegroundColor Green
+            $response = Invoke-RestMethod -Uri "http://localhost:8000/health" -TimeoutSec 2 -ErrorAction SilentlyContinue
+            if ($response.status -eq "healthy") {
+                Write-Host "[OK] Service health check: OK" -ForegroundColor Green
+            } else {
+                Write-Host "[WARN] Service health check: Unexpected response" -ForegroundColor Yellow
+            }
         } catch {
             Write-Host "[WARN] Service health check: Not responding (may still be starting)" -ForegroundColor Yellow
         }
