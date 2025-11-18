@@ -2,6 +2,13 @@
 
 > 5分钟快速部署多机器人调度系统
 
+## 📌 选择你的平台
+
+- **Windows 用户**: 继续阅读本文档
+- **Mac/Linux 用户**: 请查看 [QUICK_START_MAC_LINUX.md](QUICK_START_MAC_LINUX.md)
+
+---
+
 ## 第一步：下载代码
 
 从GitHub下载或克隆代码到本地：
@@ -64,5 +71,7 @@ python main.py
 
 ---
 
-**系统要求**: Windows 10/11, Python 3.8-3.13, 4GB+ RAM
+**系统要求**: 
+- **Windows**: Windows 10/11, Python 3.8-3.13, 4GB+ RAM
+- **Mac/Linux**: macOS 10.14+ / Linux (Ubuntu 18.04+, CentOS 7+), Python 3.8-3.13, 4GB+ RAM
 

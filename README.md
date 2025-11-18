@@ -60,7 +60,8 @@
 ## 🚀 快速开始
 
 **新用户请先查看快速部署指南**：
-- 📖 [快速开始指南（5分钟）](QUICK_START.md)
+- 📖 [快速开始指南 - Windows（5分钟）](QUICK_START.md)
+- 🍎 [快速开始指南 - Mac/Linux（5分钟）](QUICK_START_MAC_LINUX.md)
 - 📚 [详细部署指南](docs/QUICK_START_GUIDE.md)
 
 ## 安装
