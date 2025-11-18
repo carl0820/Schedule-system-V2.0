@@ -677,13 +677,14 @@ class RobotManager:
         
         logger.info(f"Loading {len(self._pending_robots)} robots from storage file")
         
-        for robot_info in self._pending_robots:
+        # 并发加载所有机器人，而不是串行加载，加快启动速度
+        async def load_single_robot(robot_info):
             robot_id = robot_info.get('robot_id')
             base_url = robot_info.get('base_url')
             
             if not robot_id or not base_url:
                 logger.warning(f"Invalid robot info: {robot_info}")
-                continue
+                return
             
             try:
                 # 重新注册机器人（但不保存到文件，避免重复保存）
@@ -694,6 +695,9 @@ class RobotManager:
                     logger.warning(f"Failed to load robot {robot_id} from storage file: {error_msg}")
             except Exception as e:
                 logger.error(f"Error loading robot {robot_id} from storage file: {e}", exc_info=True)
+        
+        # 并发加载所有机器人
+        await asyncio.gather(*[load_single_robot(robot_info) for robot_info in self._pending_robots], return_exceptions=True)
         
         # 清空待加载列表
         self._pending_robots = []
@@ -756,8 +760,9 @@ class RobotManager:
             # 获取网络检测器的超时配置（在try块外定义，确保except块可以访问）
             network_detector = get_network_detector()
             timeouts = network_detector.get_timeouts()
-            # 使用health的超时时间，但设置上限为3秒，避免阻塞启动
-            test_timeout = min(timeouts["health"], 3.0)
+            # 启动时连接测试使用更短的超时（1秒），避免阻塞服务启动
+            # 即使连接失败也会注册机器人，后台任务会继续尝试连接
+            test_timeout = min(timeouts["health"], 1.0)
             
             try:
                 # 使用health API（最轻量级）来测试连接，而不是pose API

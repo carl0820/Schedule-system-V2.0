@@ -177,11 +177,23 @@ async def health():
 @app.on_event("startup")
 async def startup_event():
     """应用启动事件：加载已注册的机器人，并启动后台任务"""
+    import asyncio
     logger.info("Application startup: Loading registered robots...")
     try:
         robot_manager = get_robot_manager()
-        await robot_manager.load_pending_robots()
-        logger.info("Application startup: Finished loading registered robots")
+        
+        # 将机器人加载改为后台任务，不阻塞服务启动
+        # 这样即使机器人连接超时，服务也能快速启动并监听端口
+        async def load_robots_background():
+            try:
+                await robot_manager.load_pending_robots()
+                logger.info("Application startup: Finished loading registered robots")
+            except Exception as e:
+                logger.error(f"Failed to load robots in background: {e}", exc_info=True)
+        
+        # 在后台异步加载机器人，不等待完成
+        asyncio.create_task(load_robots_background())
+        logger.info("Application startup: Robot loading started in background (non-blocking)")
         
         # 启动任务调度器的后台任务（如果有执行中的任务）
         from app.services.task_scheduler import get_task_scheduler
@@ -189,7 +201,7 @@ async def startup_event():
         # 在异步上下文中启动后台任务
         await task_scheduler._start_background_tasks_if_needed_async()
     except Exception as e:
-        logger.error(f"Failed to load robots on startup: {e}", exc_info=True)
+        logger.error(f"Failed to start background tasks on startup: {e}", exc_info=True)
 
 
 if __name__ == "__main__":
