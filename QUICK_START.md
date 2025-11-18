@@ -29,6 +29,7 @@ cd schedule-system-based-on-REST
 
 ```powershell
 # 推荐：使用Python安装脚本（跨平台，自动处理网络问题）
+# 脚本会自动检测并使用有 pip 的 Python
 python install_deps.py
 ```
 
@@ -42,6 +43,11 @@ python install_deps.py
 如果脚本都不可用，手动安装：
 
 ```powershell
+# 确保使用正确的 Python（有 pip 的 Python）
+# 如果 PATH 中的 python 指向错误的 Python，使用完整路径：
+C:\Users\<用户名>\AppData\Local\Programs\Python\Python313\python.exe -m pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
+
+# 或直接使用 pip（如果 PATH 正确）
 pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
 ```
 

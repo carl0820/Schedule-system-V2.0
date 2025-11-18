@@ -3,9 +3,76 @@
 """
 import subprocess
 import sys
+import os
+import platform
+
+def find_python_with_pip():
+    """查找有 pip 的 Python 解释器"""
+    # 首先检查当前 Python 是否有 pip
+    try:
+        result = subprocess.run([sys.executable, "-m", "pip", "--version"], 
+                              capture_output=True, text=True, timeout=5)
+        if result.returncode == 0:
+            return sys.executable
+    except:
+        pass
+    
+    # 如果当前 Python 没有 pip，尝试查找其他 Python
+    if platform.system() == "Windows":
+        # Windows: 查找常见位置的 Python
+        candidates = [
+            os.path.join(os.environ.get("LOCALAPPDATA", ""), "Programs", "Python", "Python313", "python.exe"),
+            os.path.join(os.environ.get("LOCALAPPDATA", ""), "Programs", "Python", "Python312", "python.exe"),
+            os.path.join(os.environ.get("LOCALAPPDATA", ""), "Programs", "Python", "Python311", "python.exe"),
+            os.path.join(os.environ.get("ProgramFiles", ""), "Python313", "python.exe"),
+            os.path.join(os.environ.get("ProgramFiles", ""), "Python312", "python.exe"),
+            os.path.join(os.environ.get("ProgramFiles", ""), "Python311", "python.exe"),
+        ]
+        
+        for candidate in candidates:
+            if os.path.exists(candidate):
+                try:
+                    result = subprocess.run([candidate, "-m", "pip", "--version"], 
+                                          capture_output=True, text=True, timeout=5)
+                    if result.returncode == 0:
+                        print(f"[INFO] Found Python with pip: {candidate}")
+                        return candidate
+                except:
+                    continue
+    
+    # 如果都找不到，返回当前 Python（让用户手动处理）
+    print(f"[WARN] Current Python ({sys.executable}) may not have pip")
+    print(f"[WARN] Please ensure pip is installed, or use a Python with pip")
+    return sys.executable
+
+# 查找有 pip 的 Python
+PYTHON_EXE = find_python_with_pip()
 
 # 检测 Python 版本
-PYTHON_VERSION = sys.version_info
+try:
+    result = subprocess.run([PYTHON_EXE, "--version"], capture_output=True, text=True, timeout=5)
+    version_str = result.stdout.strip() or result.stderr.strip()
+    print(f"[INFO] Using Python: {PYTHON_EXE}")
+    print(f"[INFO] Python version: {version_str}")
+except:
+    pass
+
+# 检测 Python 版本（通过运行 Python 代码）
+try:
+    result = subprocess.run([PYTHON_EXE, "-c", "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}')"], 
+                          capture_output=True, text=True, timeout=5)
+    if result.returncode == 0:
+        version_parts = result.stdout.strip().split('.')
+        PYTHON_VERSION = type('version_info', (), {
+            'major': int(version_parts[0]),
+            'minor': int(version_parts[1]),
+            'micro': int(version_parts[2]) if len(version_parts) > 2 else 0
+        })()
+    else:
+        PYTHON_VERSION = sys.version_info
+except:
+    PYTHON_VERSION = sys.version_info
+
 IS_PYTHON_313 = PYTHON_VERSION.major == 3 and PYTHON_VERSION.minor >= 13
 
 # 核心依赖（必需）
@@ -52,7 +119,7 @@ MIRRORS = [
 
 def install_package(package, mirror=None, allow_failure=False):
     """安装单个包"""
-    cmd = [sys.executable, "-m", "pip", "install", package, "--no-proxy"]
+    cmd = [PYTHON_EXE, "-m", "pip", "install", package]
     
     if mirror:
         cmd.extend(["-i", mirror])

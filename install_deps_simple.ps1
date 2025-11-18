@@ -26,7 +26,7 @@ Write-Host "`nUsing mirror: $mirror" -ForegroundColor Yellow
 # Install dependencies
 Write-Host "`nStarting dependency installation..." -ForegroundColor Yellow
 
-pip install -r requirements.txt -i $mirror --trusted-host pypi.tuna.tsinghua.edu.cn --no-proxy
+pip install -r requirements.txt -i $mirror --trusted-host pypi.tuna.tsinghua.edu.cn
 
 if ($LASTEXITCODE -eq 0) {
     Write-Host "`n============================================================" -ForegroundColor Green
