@@ -8,6 +8,8 @@ from typing import Optional
 from pydantic import BaseModel
 from app.services.map_manager import MapManager, get_map_manager
 from app.services.robot_manager import RobotManager, get_robot_manager
+from app.core.auth import get_current_user, can_manage_maps
+from app.models.user import User
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -99,6 +101,7 @@ async def get_map_info(
 @router.post("/load", response_model=dict)
 async def load_map(
     robot_id: str,
+    current_user: User = Depends(get_current_user),
     map_manager: MapManager = Depends(get_map_manager),
     robot_manager: RobotManager = Depends(get_robot_manager)
 ):
@@ -153,6 +156,7 @@ async def load_map(
 @router.post("/load-from-file", response_model=dict)
 async def load_map_from_file(
     file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
     map_manager: MapManager = Depends(get_map_manager)
 ):
     """
@@ -372,6 +376,7 @@ async def list_maps(
 @router.post("/load-from-robot", response_model=dict)
 async def load_map_from_robot(
     request: LoadMapFromRobotRequest,
+    current_user: User = Depends(get_current_user),
     map_manager: MapManager = Depends(get_map_manager),
     robot_manager: RobotManager = Depends(get_robot_manager)
 ):
@@ -414,6 +419,7 @@ async def load_map_from_robot(
 @router.put("/{map_id}/set-default", response_model=dict)
 async def set_default_map(
     map_id: str,
+    current_user: User = Depends(get_current_user),
     map_manager: MapManager = Depends(get_map_manager)
 ):
     """
@@ -441,6 +447,7 @@ async def set_default_map(
 @router.delete("/{map_id}", response_model=dict)
 async def delete_map(
     map_id: str,
+    current_user: User = Depends(get_current_user),
     map_manager: MapManager = Depends(get_map_manager)
 ):
     """

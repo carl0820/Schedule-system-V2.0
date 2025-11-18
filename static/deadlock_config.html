@@ -12,45 +12,73 @@
         }
         
         body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: #f5f5f5;
-            padding: 2rem;
+            font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'SF Pro Text', 'Helvetica Neue', Arial, sans-serif;
+            background: #F2F2F7;
+            padding: 0;
+            margin: 0;
         }
         
-        .container {
-            max-width: 1000px;
-            margin: 0 auto;
-            background: white;
-            border-radius: 8px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-            padding: 2rem;
+        .header {
+            background: #FFFFFF;
+            color: #000000;
+            padding: 1rem 1.25rem;
+            margin-bottom: 0;
+            box-shadow: 0 0.5px 0 rgba(0,0,0,0.1);
+            border-bottom: 0.5px solid rgba(0,0,0,0.1);
+            position: sticky;
+            top: 0;
+            z-index: 100;
         }
         
-        h1 {
-            color: #333;
-            margin-bottom: 0.5rem;
-            font-size: 1.8rem;
+        .header h1 {
+            font-size: 1.25rem;
+            margin-bottom: 0.25rem;
+            font-weight: 600;
+            letter-spacing: -0.01em;
         }
         
         .subtitle {
-            color: #666;
-            margin-bottom: 2rem;
-            font-size: 0.9rem;
+            color: #8E8E93;
+            margin-bottom: 0;
+            font-size: 0.9375rem;
+        }
+        
+        .container {
+            max-width: 100%;
+            margin: 0;
+            padding: 1rem 1.25rem;
+        }
+        
+        @media (min-width: 768px) {
+            .container {
+                max-width: 90%;
+                margin: 0 auto;
+                padding: 1.5rem;
+            }
+        }
+        
+        @media (min-width: 1200px) {
+            .container {
+                max-width: 1200px;
+            }
         }
         
         .config-section {
-            margin-bottom: 2rem;
+            margin-bottom: 1.5rem;
             padding: 1.5rem;
-            background: #f8f9fa;
-            border-radius: 6px;
+            background: #FFFFFF;
+            border-radius: 14px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.08);
         }
         
         .config-section h2 {
-            font-size: 1.2rem;
-            color: #333;
+            font-size: 1.0625rem;
+            color: #000000;
             margin-bottom: 1rem;
             padding-bottom: 0.5rem;
-            border-bottom: 2px solid #667eea;
+            border-bottom: 0.5px solid rgba(0,0,0,0.1);
+            font-weight: 600;
+            letter-spacing: -0.01em;
         }
         
         .config-section p {
@@ -67,29 +95,34 @@
             display: block;
             margin-bottom: 0.5rem;
             font-weight: 500;
-            color: #333;
-            font-size: 0.95rem;
+            color: #8E8E93;
+            font-size: 0.8125rem;
+            letter-spacing: -0.01em;
+            text-transform: uppercase;
         }
         
         .form-group .description {
-            font-size: 0.85rem;
-            color: #666;
+            font-size: 0.8125rem;
+            color: #8E8E93;
             margin-bottom: 0.5rem;
-            font-style: italic;
+            font-style: normal;
         }
         
         .form-group input[type="number"] {
             width: 100%;
             padding: 0.75rem;
-            border: 1px solid #ddd;
-            border-radius: 4px;
-            font-size: 0.9rem;
+            border: 0.5px solid rgba(0,0,0,0.2);
+            border-radius: 10px;
+            font-size: 0.9375rem;
+            background: #FFFFFF;
+            color: #000000;
+            transition: all 0.2s ease;
         }
         
         .form-group input[type="number"]:focus {
             outline: none;
-            border-color: #667eea;
-            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+            border-color: #007AFF;
+            box-shadow: 0 0 0 3px rgba(0, 122, 255, 0.1);
         }
         
         .form-row {
@@ -99,48 +132,64 @@
         }
         
         .btn {
-            padding: 0.75rem 1.5rem;
+            padding: 0.625rem 1rem;
             border: none;
-            border-radius: 4px;
+            border-radius: 10px;
             cursor: pointer;
-            font-size: 0.9rem;
+            font-size: 0.9375rem;
             font-weight: 500;
-            transition: all 0.2s;
+            transition: all 0.2s ease;
+            letter-spacing: -0.01em;
         }
         
         .btn-primary {
-            background: #667eea;
+            background: #007AFF;
             color: white;
         }
         
         .btn-primary:hover {
-            background: #5568d3;
+            background: #0051D5;
+        }
+        
+        .btn-primary:active {
+            background: #0040B3;
+            transform: scale(0.98);
         }
         
         .btn-secondary {
-            background: #6c757d;
-            color: white;
+            background: rgba(0, 0, 0, 0.05);
+            color: #007AFF;
         }
         
         .btn-secondary:hover {
-            background: #5a6268;
+            background: rgba(0, 0, 0, 0.08);
+        }
+        
+        .btn-secondary:active {
+            background: rgba(0, 0, 0, 0.12);
+            transform: scale(0.98);
         }
         
         .btn-danger {
-            background: #dc3545;
+            background: #FF3B30;
             color: white;
         }
         
         .btn-danger:hover {
-            background: #c82333;
+            background: #E6342A;
+        }
+        
+        .btn-danger:active {
+            background: #CC2A20;
+            transform: scale(0.98);
         }
         
         .btn-group {
             display: flex;
-            gap: 1rem;
-            margin-top: 2rem;
-            padding-top: 2rem;
-            border-top: 1px solid #e0e0e0;
+            gap: 0.75rem;
+            margin-top: 1.5rem;
+            padding-top: 1.5rem;
+            border-top: 0.5px solid rgba(0,0,0,0.1);
         }
         
         .alert {
@@ -185,9 +234,11 @@
     </style>
 </head>
 <body>
-    <div class="container">
+    <div class="header">
         <h1>⚙️ 死锁配置</h1>
         <p class="subtitle">配置多机器人运行时的死锁检测和解除参数</p>
+    </div>
+    <div class="container">
         
         <div id="alertContainer"></div>
         
@@ -333,6 +384,25 @@
     
     <script>
         const API_BASE = window.location.origin;
+        
+        // 检查登录状态
+        const token = localStorage.getItem('access_token');
+        if (!token) {
+            window.location.href = '/static/login.html';
+        }
+        
+        // 添加认证头到所有fetch请求
+        const originalFetch = window.fetch;
+        window.fetch = function(...args) {
+            const [url, options = {}] = args;
+            if (typeof url === 'string' && url.startsWith('/api/')) {
+                options.headers = {
+                    ...options.headers,
+                    'Authorization': `Bearer ${token}`
+                };
+            }
+            return originalFetch.apply(this, args);
+        };
         let currentConfig = {};
         
         // 页面加载时获取配置

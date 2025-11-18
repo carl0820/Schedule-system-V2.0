@@ -12,45 +12,77 @@
         }
         
         body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: #f5f5f5;
-            padding: 2rem;
+            font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'SF Pro Text', 'Helvetica Neue', Arial, sans-serif;
+            background: #F2F2F7;
+            padding: 0;
+            margin: 0;
         }
         
         .header {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            padding: 1.5rem 2rem;
-            border-radius: 8px;
-            margin-bottom: 2rem;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            background: #FFFFFF;
+            color: #000000;
+            padding: 1rem 1.25rem;
+            margin-bottom: 0;
+            box-shadow: 0 0.5px 0 rgba(0,0,0,0.1);
+            border-bottom: 0.5px solid rgba(0,0,0,0.1);
+            position: sticky;
+            top: 0;
+            z-index: 100;
         }
         
         .header h1 {
-            font-size: 1.8rem;
-            margin-bottom: 0.5rem;
+            font-size: 1.25rem;
+            margin-bottom: 0.25rem;
+            font-weight: 600;
+            letter-spacing: -0.01em;
         }
         
         .header p {
-            opacity: 0.9;
+            color: #8E8E93;
+            font-size: 0.9375rem;
         }
         
         .container {
-            max-width: 1400px;
-            margin: 0 auto;
+            max-width: 100%;
+            margin: 0;
+            padding: 1rem 1.25rem;
+        }
+        
+        @media (min-width: 768px) {
+            .container {
+                max-width: 90%;
+                margin: 0 auto;
+                padding: 1.5rem;
+            }
+        }
+        
+        @media (min-width: 1200px) {
+            .container {
+                max-width: 1400px;
+            }
+        }
+        
+        @media (min-width: 1920px) {
+            .container {
+                max-width: 1600px;
+            }
         }
         
         .actions {
-            background: white;
+            background: #FFFFFF;
             padding: 1.5rem;
-            border-radius: 8px;
-            margin-bottom: 2rem;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            border-radius: 14px;
+            margin-bottom: 1.5rem;
+            margin-top: 1rem;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.08);
         }
         
         .actions h2 {
             margin-bottom: 1rem;
-            color: #333;
+            color: #000000;
+            font-size: 1.0625rem;
+            font-weight: 600;
+            letter-spacing: -0.01em;
         }
         
         .form-group {
@@ -60,8 +92,11 @@
         .form-group label {
             display: block;
             margin-bottom: 0.5rem;
-            color: #555;
+            color: #8E8E93;
             font-weight: 500;
+            font-size: 0.8125rem;
+            letter-spacing: -0.01em;
+            text-transform: uppercase;
         }
         
         .form-group input,
@@ -69,9 +104,20 @@
         .form-group textarea {
             width: 100%;
             padding: 0.75rem;
-            border: 1px solid #ddd;
-            border-radius: 4px;
-            font-size: 1rem;
+            border: 0.5px solid rgba(0,0,0,0.2);
+            border-radius: 10px;
+            font-size: 0.9375rem;
+            background: #FFFFFF;
+            color: #000000;
+            transition: all 0.2s ease;
+        }
+        
+        .form-group input:focus,
+        .form-group select:focus,
+        .form-group textarea:focus {
+            outline: none;
+            border-color: #007AFF;
+            box-shadow: 0 0 0 3px rgba(0, 122, 255, 0.1);
         }
         
         .form-group textarea {
@@ -80,41 +126,58 @@
         }
         
         .btn {
-            padding: 0.75rem 1.5rem;
+            padding: 0.625rem 1rem;
             border: none;
-            border-radius: 4px;
+            border-radius: 10px;
             cursor: pointer;
-            font-size: 1rem;
-            transition: all 0.2s;
+            font-size: 0.9375rem;
+            transition: all 0.2s ease;
             margin-right: 0.5rem;
             margin-top: 0.5rem;
+            font-weight: 500;
+            letter-spacing: -0.01em;
         }
         
         .btn-primary {
-            background: #667eea;
+            background: #007AFF;
             color: white;
         }
         
         .btn-primary:hover {
-            background: #5568d3;
+            background: #0051D5;
+        }
+        
+        .btn-primary:active {
+            background: #0040B3;
+            transform: scale(0.98);
         }
         
         .btn-danger {
-            background: #e74c3c;
+            background: #FF3B30;
             color: white;
         }
         
         .btn-danger:hover {
-            background: #c0392b;
+            background: #E6342A;
+        }
+        
+        .btn-danger:active {
+            background: #CC2A20;
+            transform: scale(0.98);
         }
         
         .btn-secondary {
-            background: #95a5a6;
-            color: white;
+            background: rgba(0, 0, 0, 0.05);
+            color: #007AFF;
         }
         
         .btn-secondary:hover {
-            background: #7f8c8d;
+            background: rgba(0, 0, 0, 0.08);
+        }
+        
+        .btn-secondary:active {
+            background: rgba(0, 0, 0, 0.12);
+            transform: scale(0.98);
         }
         
         .maps-grid {
@@ -124,27 +187,31 @@
         }
         
         .map-card {
-            background: white;
-            border-radius: 8px;
+            background: #FFFFFF;
+            border-radius: 14px;
             padding: 1.5rem;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-            transition: transform 0.2s, box-shadow 0.2s;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+            transition: transform 0.2s ease, box-shadow 0.2s ease;
         }
         
         .map-card:hover {
             transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.12);
+        }
+        
+        .map-card:active {
+            transform: scale(0.99);
         }
         
         .map-card.default {
-            border: 2px solid #667eea;
+            border: 2px solid #007AFF;
         }
         
         .map-thumbnail {
             width: 100%;
             height: 200px;
-            background: #f0f0f0;
-            border-radius: 4px;
+            background: rgba(0, 0, 0, 0.02);
+            border-radius: 10px;
             margin-bottom: 1rem;
             display: flex;
             align-items: center;
@@ -156,11 +223,19 @@
             width: 100%;
             height: 100%;
             object-fit: contain;
+            display: block;
+        }
+        
+        .map-thumbnail img[src=""],
+        .map-thumbnail img:not([src]) {
+            display: none;
         }
         
         .map-thumbnail .placeholder {
-            color: #999;
-            font-size: 0.9rem;
+            color: #8E8E93;
+            font-size: 0.9375rem;
+            text-align: center;
+            padding: 2rem 1rem;
         }
         
         .map-info {
@@ -168,33 +243,39 @@
         }
         
         .map-name {
-            font-size: 1.2rem;
+            font-size: 1.0625rem;
             font-weight: 600;
-            color: #333;
+            color: #000000;
             margin-bottom: 0.5rem;
             display: flex;
             align-items: center;
             gap: 0.5rem;
+            letter-spacing: -0.01em;
         }
         
         .map-name .default-badge {
-            background: #667eea;
+            background: #007AFF;
             color: white;
-            padding: 0.2rem 0.6rem;
-            border-radius: 12px;
+            padding: 0.25rem 0.625rem;
+            border-radius: 10px;
             font-size: 0.75rem;
-            font-weight: normal;
+            font-weight: 500;
         }
         
         .map-description {
-            color: #666;
-            font-size: 0.9rem;
+            color: #8E8E93;
+            font-size: 0.9375rem;
             margin-bottom: 0.5rem;
+            line-height: 1.5;
+            min-height: 1.5rem; /* 确保固定高度，保持对齐 */
+            overflow: hidden;
+            text-overflow: ellipsis;
+            word-break: break-word;
         }
         
         .map-meta {
-            color: #999;
-            font-size: 0.85rem;
+            color: #8E8E93;
+            font-size: 0.8125rem;
             margin-top: 0.5rem;
         }
         
@@ -279,6 +360,25 @@
     </div>
     
     <script>
+        // 检查登录状态
+        const token = localStorage.getItem('access_token');
+        if (!token) {
+            window.location.href = '/static/login.html';
+        }
+        
+        // 添加认证头到所有fetch请求
+        const originalFetch = window.fetch;
+        window.fetch = function(...args) {
+            const [url, options = {}] = args;
+            if (typeof url === 'string' && url.startsWith('/api/')) {
+                options.headers = {
+                    ...options.headers,
+                    'Authorization': `Bearer ${token}`
+                };
+            }
+            return originalFetch.apply(this, args);
+        };
+        
         let robots = [];
         let maps = [];
         
@@ -342,10 +442,6 @@
                 const card = document.createElement('div');
                 card.className = `map-card ${map.is_default ? 'default' : ''}`;
                 
-                const thumbnail = map.thumbnail_url 
-                    ? `<img src="${map.thumbnail_url}" alt="${map.name}">`
-                    : '<div class="placeholder">暂无缩略图</div>';
-                
                 const defaultBadge = map.is_default 
                     ? '<span class="default-badge">默认</span>'
                     : '';
@@ -353,16 +449,23 @@
                 const sizeMB = (map.file_size / 1024 / 1024).toFixed(2);
                 const dimensions = map.metadata ? `${map.metadata.width} × ${map.metadata.height}` : '未知';
                 
+                // 处理描述文本，限制为50字
+                let descriptionText = '';
+                if (map.description) {
+                    descriptionText = map.description.length > 50 
+                        ? map.description.substring(0, 50) + '...' 
+                        : map.description;
+                } else {
+                    descriptionText = ''; // 空描述也保留占位，保持对齐
+                }
+                
                 card.innerHTML = `
-                    <div class="map-thumbnail">
-                        ${thumbnail}
-                    </div>
                     <div class="map-info">
                         <div class="map-name">
                             ${map.name}
                             ${defaultBadge}
                         </div>
-                        ${map.description ? `<div class="map-description">${map.description}</div>` : ''}
+                        <div class="map-description">${descriptionText}</div>
                         <div class="map-meta">
                             <div>尺寸: ${dimensions}</div>
                             <div>大小: ${sizeMB} MB</div>

@@ -1,0 +1,912 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>用户管理 - 多机器人调度系统</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'SF Pro Text', 'Helvetica Neue', Arial, sans-serif;
+            background: #F2F2F7;
+            padding: 0;
+            margin: 0;
+        }
+        
+        .header {
+            background: #FFFFFF;
+            color: #000000;
+            padding: 1rem 1.25rem;
+            margin-bottom: 0;
+            box-shadow: 0 0.5px 0 rgba(0,0,0,0.1);
+            border-bottom: 0.5px solid rgba(0,0,0,0.1);
+            position: sticky;
+            top: 0;
+            z-index: 100;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .header h1 {
+            font-size: 1.25rem;
+            font-weight: 600;
+            letter-spacing: -0.01em;
+        }
+        
+        .container {
+            max-width: 100%;
+            margin: 0;
+            padding: 1rem 1.25rem;
+        }
+        
+        @media (min-width: 768px) {
+            .container {
+                max-width: 90%;
+                margin: 0 auto;
+                padding: 1.5rem;
+            }
+        }
+        
+        @media (min-width: 1200px) {
+            .container {
+                max-width: 1400px;
+            }
+        }
+        
+        .user-card {
+            background: #FFFFFF;
+            border-radius: 14px;
+            padding: 1.5rem;
+            margin-bottom: 1rem;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+        }
+        
+        .user-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1rem;
+            padding-bottom: 1rem;
+            border-bottom: 0.5px solid rgba(0,0,0,0.1);
+        }
+        
+        .user-info {
+            flex: 1;
+        }
+        
+        .user-name {
+            font-size: 1.0625rem;
+            font-weight: 600;
+            color: #000000;
+            margin-bottom: 0.5rem;
+            letter-spacing: -0.01em;
+        }
+        
+        .user-email {
+            font-size: 0.9375rem;
+            color: #8E8E93;
+            margin-bottom: 0.25rem;
+        }
+        
+        .user-meta {
+            font-size: 0.8125rem;
+            color: #8E8E93;
+        }
+        
+        .role-badge {
+            padding: 0.375rem 0.75rem;
+            border-radius: 8px;
+            font-size: 0.8125rem;
+            font-weight: 500;
+            letter-spacing: -0.01em;
+        }
+        
+        .role-badge.super_admin {
+            background: #FF3B30;
+            color: white;
+        }
+        
+        .role-badge.admin {
+            background: #FF9500;
+            color: white;
+        }
+        
+        .role-badge.operator {
+            background: #5AC8FA;
+            color: white;
+        }
+        
+        .role-badge.user {
+            background: #8E8E93;
+            color: white;
+        }
+        
+        .user-actions {
+            display: flex;
+            gap: 0.5rem;
+        }
+        
+        .btn {
+            padding: 0.625rem 1rem;
+            border: none;
+            border-radius: 10px;
+            cursor: pointer;
+            font-size: 0.9375rem;
+            transition: all 0.2s ease;
+            font-weight: 500;
+            letter-spacing: -0.01em;
+        }
+        
+        .btn-primary {
+            background: #007AFF;
+            color: white;
+        }
+        
+        .btn-primary:hover {
+            background: #0051D5;
+        }
+        
+        .btn-primary:active {
+            background: #0040B3;
+            transform: scale(0.98);
+        }
+        
+        .btn-secondary {
+            background: rgba(0, 0, 0, 0.05);
+            color: #007AFF;
+        }
+        
+        .btn-secondary:hover {
+            background: rgba(0, 0, 0, 0.08);
+        }
+        
+        .btn-danger {
+            background: #FF3B30;
+            color: white;
+        }
+        
+        .btn-danger:hover {
+            background: #E6342A;
+        }
+        
+        .btn-danger:active {
+            background: #CC2A20;
+            transform: scale(0.98);
+        }
+        
+        .loading {
+            text-align: center;
+            padding: 3rem;
+            color: #8E8E93;
+            font-size: 0.9375rem;
+        }
+        
+        .empty {
+            text-align: center;
+            padding: 3rem;
+            color: #8E8E93;
+            font-size: 0.9375rem;
+        }
+        
+        .status-badge {
+            display: inline-block;
+            padding: 0.25rem 0.625rem;
+            border-radius: 6px;
+            font-size: 0.75rem;
+            font-weight: 500;
+        }
+        
+        .status-badge.active {
+            background: #34C759;
+            color: white;
+        }
+        
+        .status-badge.inactive {
+            background: #8E8E93;
+            color: white;
+        }
+        
+        /* 模态框样式 */
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.5);
+            z-index: 1000;
+            justify-content: center;
+            align-items: center;
+        }
+        
+        .modal.show {
+            display: flex;
+        }
+        
+        .modal-content {
+            background: #FFFFFF;
+            border-radius: 14px;
+            padding: 2rem;
+            width: 90%;
+            max-width: 500px;
+            max-height: 90vh;
+            overflow-y: auto;
+        }
+        
+        .modal-header {
+            margin-bottom: 1.5rem;
+        }
+        
+        .modal-header h2 {
+            font-size: 1.25rem;
+            font-weight: 600;
+            color: #000000;
+            letter-spacing: -0.01em;
+        }
+        
+        .form-group {
+            margin-bottom: 1.25rem;
+        }
+        
+        .form-group label {
+            display: block;
+            margin-bottom: 0.5rem;
+            font-size: 0.8125rem;
+            color: #8E8E93;
+            font-weight: 500;
+            letter-spacing: -0.01em;
+            text-transform: uppercase;
+        }
+        
+        .form-group input,
+        .form-group select {
+            width: 100%;
+            padding: 0.75rem;
+            border: 0.5px solid rgba(0,0,0,0.2);
+            border-radius: 10px;
+            font-size: 0.9375rem;
+            background: #FFFFFF;
+            color: #000000;
+            transition: all 0.2s ease;
+            font-family: inherit;
+        }
+        
+        .form-group input:focus,
+        .form-group select:focus {
+            outline: none;
+            border-color: #007AFF;
+            box-shadow: 0 0 0 3px rgba(0, 122, 255, 0.1);
+        }
+        
+        .modal-actions {
+            display: flex;
+            gap: 0.75rem;
+            justify-content: flex-end;
+            margin-top: 1.5rem;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>👥 用户管理</h1>
+        <div style="display: flex; gap: 0.75rem; align-items: center;">
+            <a href="index.html" class="btn btn-secondary" style="text-decoration: none;">返回首页</a>
+            <button class="btn btn-primary" onclick="showCreateUserModal()" id="createUserBtn" style="display: none;">+ 新建用户</button>
+            <div style="position: relative;">
+                <div id="userDropdownBtn" style="display: flex; align-items: center; gap: 0.625rem; padding: 0.5rem 0.75rem; background: transparent; border: none; border-radius: 10px; cursor: pointer; transition: background 0.2s ease; user-select: none;">
+                    <div style="width: 36px; height: 36px; border-radius: 50%; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); display: flex; align-items: center; justify-content: center; color: white; font-size: 0.9375rem; font-weight: 600; box-shadow: 0 2px 8px rgba(102, 126, 234, 0.3);">
+                        <span id="userAvatar">U</span>
+                    </div>
+                    <div style="display: flex; flex-direction: column; align-items: flex-start; line-height: 1.3;">
+                        <span id="currentUserName" style="font-size: 0.9375rem; font-weight: 500; color: #000;">加载中...</span>
+                        <span id="currentUserRole" style="font-size: 0.8125rem; color: #8E8E93;">-</span>
+                    </div>
+                </div>
+                <div id="userDropdownMenu" style="display: none; position: absolute; top: 100%; right: 0; margin-top: 0.5rem; padding: 0; background: #FFFFFF; border-radius: 14px; box-shadow: 0 4px 16px rgba(0,0,0,0.12); min-width: 280px; z-index: 1000; overflow: hidden; opacity: 0; transform: translateY(-5px); transition: opacity 0.2s ease, transform 0.2s ease; pointer-events: none; border: 0.5px solid rgba(0,0,0,0.1);">
+                    <div id="userInfoItem" style="pointer-events: none; padding: 1.25rem; border-bottom: 0.5px solid rgba(0,0,0,0.1); background: #F9F9F9;">
+                        <div style="display: flex; align-items: center; gap: 0.875rem;">
+                            <div style="width: 48px; height: 48px; border-radius: 50%; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); display: flex; align-items: center; justify-content: center; color: white; font-size: 1.25rem; font-weight: 600; box-shadow: 0 2px 8px rgba(102, 126, 234, 0.3);">
+                                <span id="userAvatarLarge">U</span>
+                            </div>
+                            <div style="flex: 1; min-width: 0;">
+                                <div id="currentUserDisplayName" style="font-size: 1rem; font-weight: 600; color: #000; margin-bottom: 0.25rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">加载中...</div>
+                                <div id="currentUserDisplayRole" style="font-size: 0.875rem; color: #8E8E93;">-</div>
+                            </div>
+                        </div>
+                    </div>
+                    <a href="javascript:void(0)" onclick="changeMyPassword()" style="display: flex; align-items: center; gap: 0.875rem; padding: 1rem 1.25rem; color: #000000; text-decoration: none; font-size: 0.9375rem; transition: background 0.2s ease; font-weight: 400; letter-spacing: -0.01em;">
+                        <span style="font-size: 1.25rem; width: 24px; text-align: center;">🔑</span>
+                        <span>修改密码</span>
+                    </a>
+                    <a href="javascript:void(0)" onclick="logout()" style="display: flex; align-items: center; gap: 0.875rem; padding: 1rem 1.25rem; color: #FF3B30; text-decoration: none; font-size: 0.9375rem; transition: background 0.2s ease; font-weight: 400; letter-spacing: -0.01em;">
+                        <span style="font-size: 1.25rem; width: 24px; text-align: center;">↻</span>
+                        <span>退出登录</span>
+                    </a>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <div class="container">
+        <div id="usersList">
+            <div class="loading">加载中...</div>
+        </div>
+    </div>
+    
+    <!-- 创建/编辑用户模态框 -->
+    <div class="modal" id="userModal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 id="modalTitle">新建用户</h2>
+            </div>
+            <form id="userForm">
+                <input type="hidden" id="editUserId">
+                <div class="form-group">
+                    <label>用户名</label>
+                    <input type="text" id="modalUsername" required>
+                </div>
+                <div class="form-group">
+                    <label>邮箱（可选）</label>
+                    <input type="email" id="modalEmail">
+                </div>
+                <div class="form-group">
+                    <label>角色</label>
+                    <select id="modalRole" required>
+                        <option value="user">普通用户</option>
+                        <option value="operator">运维人员</option>
+                        <option value="admin">管理员</option>
+                        <option value="super_admin">超级管理员</option>
+                    </select>
+                </div>
+                <div class="form-group" id="passwordGroup">
+                    <label>密码</label>
+                    <input type="password" id="modalPassword" required>
+                </div>
+                <div class="form-group" id="activeGroup" style="display: none;">
+                    <label>
+                        <input type="checkbox" id="modalIsActive" checked style="width: auto; margin-right: 0.5rem;">
+                        启用账户
+                    </label>
+                </div>
+                <div class="form-group" id="changePasswordGroup" style="display: none;">
+                    <label>
+                        <input type="checkbox" id="changePasswordCheck" style="width: auto; margin-right: 0.5rem;" onchange="togglePasswordField()">
+                        修改密码
+                    </label>
+                </div>
+                <div class="form-group" id="newPasswordGroup" style="display: none;">
+                    <label>新密码</label>
+                    <input type="password" id="modalNewPassword">
+                </div>
+                <div class="modal-actions">
+                    <button type="button" class="btn btn-secondary" onclick="closeUserModal()">取消</button>
+                    <button type="submit" class="btn btn-primary">保存</button>
+                </div>
+            </form>
+        </div>
+    </div>
+    
+    <script>
+        const API_BASE = window.location.origin;
+        let currentUser = null;
+        let users = [];
+        
+        // 检查登录状态
+        const token = localStorage.getItem('access_token');
+        if (!token) {
+            window.location.href = '/static/login.html';
+        }
+        
+        // 获取当前用户信息
+        async function loadCurrentUser() {
+            try {
+                const response = await fetch(`${API_BASE}/api/auth/me`, {
+                    headers: {
+                        'Authorization': `Bearer ${token}`
+                    }
+                });
+                
+                if (response.ok) {
+                    currentUser = await response.json();
+                    // 只有超级管理员可以创建用户
+                    if (currentUser.role === 'super_admin') {
+                        document.getElementById('createUserBtn').style.display = 'block';
+                    }
+                } else if (response.status === 401) {
+                    window.location.href = '/static/login.html';
+                }
+            } catch (error) {
+                console.error('Failed to load current user:', error);
+            }
+        }
+        
+        async function loadUsers() {
+            const container = document.getElementById('usersList');
+            if (!container) {
+                console.error('Container element not found');
+                return;
+            }
+            
+            try {
+                console.log('Loading users from:', `${API_BASE}/api/auth/users`);
+                const response = await fetch(`${API_BASE}/api/auth/users`, {
+                    headers: {
+                        'Authorization': `Bearer ${token}`
+                    }
+                });
+                
+                console.log('Response status:', response.status, response.statusText);
+                
+                if (response.ok) {
+                    const data = await response.json();
+                    console.log('Received data:', data);
+                    
+                    // 处理返回的数据格式（可能是对象或数组）
+                    if (Array.isArray(data)) {
+                        users = data;
+                    } else if (typeof data === 'object' && data !== null) {
+                        // 如果是对象，转换为数组
+                        users = Object.values(data);
+                    } else {
+                        users = [];
+                    }
+                    
+                    console.log('Processed users:', users);
+                    renderUsers();
+                } else if (response.status === 401) {
+                    console.warn('Unauthorized, redirecting to login');
+                    window.location.href = '/static/login.html';
+                } else {
+                    const errorText = await response.text();
+                    console.error('Error response:', errorText);
+                    let error;
+                    try {
+                        error = JSON.parse(errorText);
+                    } catch (e) {
+                        error = { detail: errorText || '未知错误' };
+                    }
+                    container.innerHTML = `<div class="empty">无权限访问用户列表: ${error.detail || '未知错误'}</div>`;
+                }
+            } catch (error) {
+                console.error('Failed to load users:', error);
+                container.innerHTML = `<div class="empty">加载失败: ${error.message || '请刷新重试'}</div>`;
+            }
+        }
+        
+        function renderUsers() {
+            const container = document.getElementById('usersList');
+            if (!container) {
+                console.error('Container element not found in renderUsers');
+                return;
+            }
+            
+            console.log('Rendering users, count:', users.length);
+            
+            if (users.length === 0) {
+                container.innerHTML = '<div class="empty">暂无用户</div>';
+                return;
+            }
+            
+            const roleNames = {
+                'super_admin': '超级管理员',
+                'admin': '管理员',
+                'operator': '运维人员',
+                'user': '普通用户'
+            };
+            
+            try {
+                container.innerHTML = users.map(user => {
+                const isCurrentUser = currentUser && user.user_id === currentUser.user_id;
+                const canEdit = currentUser && currentUser.role === 'super_admin';
+                const canView = currentUser && (currentUser.role === 'super_admin' || currentUser.role === 'admin');
+                
+                return `
+                    <div class="user-card">
+                        <div class="user-header">
+                            <div class="user-info">
+                                <div class="user-name">
+                                    ${user.username}
+                                    <span class="role-badge ${user.role}">${roleNames[user.role] || user.role}</span>
+                                    <span class="status-badge ${user.is_active ? 'active' : 'inactive'}">
+                                        ${user.is_active ? '启用' : '禁用'}
+                                    </span>
+                                </div>
+                                ${user.email ? `<div class="user-email">${user.email}</div>` : ''}
+                                <div class="user-meta">
+                                    创建时间: ${user.created_at ? new Date(user.created_at).toLocaleString('zh-CN') : '未知'} |
+                                    最后登录: ${user.last_login ? new Date(user.last_login).toLocaleString('zh-CN') : '从未登录'}
+                                </div>
+                            </div>
+                            ${canEdit ? `
+                                <div class="user-actions">
+                                    <button class="btn btn-secondary" onclick="editUser('${user.user_id}')">编辑</button>
+                                    ${!isCurrentUser ? `<button class="btn btn-danger" onclick="deleteUser('${user.user_id}', '${user.username}')">删除</button>` : ''}
+                                </div>
+                            ` : isCurrentUser ? `
+                                <div class="user-actions">
+                                    <button class="btn btn-secondary" onclick="changeMyPassword('${user.user_id}')">修改密码</button>
+                                </div>
+                            ` : ''}
+                        </div>
+                    </div>
+                `;
+                }).join('');
+                console.log('Users rendered successfully');
+            } catch (error) {
+                console.error('Error rendering users:', error);
+                container.innerHTML = `<div class="empty">渲染用户列表时出错: ${error.message}</div>`;
+            }
+        }
+        
+        function showCreateUserModal() {
+            document.getElementById('modalTitle').textContent = '新建用户';
+            document.getElementById('editUserId').value = '';
+            document.getElementById('userForm').reset();
+            document.getElementById('passwordGroup').style.display = 'block';
+            document.getElementById('activeGroup').style.display = 'none';
+            document.getElementById('changePasswordGroup').style.display = 'none';
+            document.getElementById('newPasswordGroup').style.display = 'none';
+            document.getElementById('userModal').classList.add('show');
+        }
+        
+        function editUser(userId) {
+            const user = users.find(u => u.user_id === userId);
+            if (!user) return;
+            
+            document.getElementById('modalTitle').textContent = '编辑用户';
+            document.getElementById('editUserId').value = userId;
+            document.getElementById('modalUsername').value = user.username;
+            document.getElementById('modalEmail').value = user.email || '';
+            document.getElementById('modalRole').value = user.role;
+            document.getElementById('modalIsActive').checked = user.is_active;
+            document.getElementById('passwordGroup').style.display = 'none';
+            document.getElementById('activeGroup').style.display = 'block';
+            document.getElementById('changePasswordGroup').style.display = 'block';
+            document.getElementById('changePasswordCheck').checked = false;
+            document.getElementById('newPasswordGroup').style.display = 'none';
+            document.getElementById('modalNewPassword').value = '';
+            document.getElementById('userModal').classList.add('show');
+        }
+        
+        function togglePasswordField() {
+            const checkBox = document.getElementById('changePasswordCheck');
+            const passwordGroup = document.getElementById('newPasswordGroup');
+            if (checkBox.checked) {
+                passwordGroup.style.display = 'block';
+                document.getElementById('modalNewPassword').required = true;
+            } else {
+                passwordGroup.style.display = 'none';
+                document.getElementById('modalNewPassword').required = false;
+                document.getElementById('modalNewPassword').value = '';
+            }
+        }
+        
+        async function changeMyPassword(userId) {
+            const oldPassword = prompt('请输入当前密码:');
+            if (!oldPassword) {
+                return;
+            }
+            const newPassword = prompt('请输入新密码:');
+            if (!newPassword) {
+                return;
+            }
+            const confirmPassword = prompt('请再次输入新密码:');
+            if (newPassword !== confirmPassword) {
+                alert('两次输入的密码不一致');
+                return;
+            }
+            
+            try {
+                const response = await fetch(`${API_BASE}/api/auth/users/${userId}/change-password`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${token}`
+                    },
+                    body: JSON.stringify({
+                        old_password: oldPassword,
+                        new_password: newPassword
+                    })
+                });
+                
+                if (response.ok) {
+                    alert('密码修改成功！');
+                    await loadUsers();
+                } else {
+                    const error = await response.json();
+                    alert('密码修改失败: ' + (error.detail || '未知错误'));
+                }
+            } catch (error) {
+                alert('密码修改失败: ' + error.message);
+            }
+        }
+        
+        function closeUserModal() {
+            document.getElementById('userModal').classList.remove('show');
+        }
+        
+        async function deleteUser(userId, username) {
+            if (!confirm(`确定要删除用户 "${username}" 吗？此操作不可恢复。`)) {
+                return;
+            }
+            
+            try {
+                const response = await fetch(`${API_BASE}/api/auth/users/${userId}`, {
+                    method: 'DELETE',
+                    headers: {
+                        'Authorization': `Bearer ${token}`
+                    }
+                });
+                
+                if (response.ok) {
+                    await loadUsers();
+                } else {
+                    const error = await response.json();
+                    alert('删除失败: ' + (error.detail || '未知错误'));
+                }
+            } catch (error) {
+                alert('删除失败: ' + error.message);
+            }
+        }
+        
+        document.getElementById('userForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const userId = document.getElementById('editUserId').value;
+            const username = document.getElementById('modalUsername').value;
+            const email = document.getElementById('modalEmail').value;
+            const role = document.getElementById('modalRole').value;
+            const password = document.getElementById('modalPassword').value;
+            const newPassword = document.getElementById('modalNewPassword').value;
+            const isActive = document.getElementById('modalIsActive').checked;
+            const changePassword = document.getElementById('changePasswordCheck')?.checked || false;
+            const isCurrentUser = currentUser && userId === currentUser.user_id;
+            
+            try {
+                let response;
+                if (userId) {
+                    // 如果是当前用户修改密码
+                    if (isCurrentUser && newPassword) {
+                        // 调用修改密码API
+                        response = await fetch(`${API_BASE}/api/auth/users/${userId}/change-password`, {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json',
+                                'Authorization': `Bearer ${token}`
+                            },
+                            body: JSON.stringify({
+                                old_password: '', // 超级管理员修改他人密码不需要旧密码
+                                new_password: newPassword
+                            })
+                        });
+                    } else {
+                        // 更新用户
+                        const updateData = {
+                            username: username,
+                            email: email || null,
+                            role: role,
+                            is_active: isActive
+                        };
+                        // 如果勾选了修改密码，使用新密码
+                        if (changePassword && newPassword) {
+                            updateData.password = newPassword;
+                        } else if (password) {
+                            // 兼容旧逻辑
+                            updateData.password = password;
+                        }
+                        
+                        response = await fetch(`${API_BASE}/api/auth/users/${userId}`, {
+                            method: 'PUT',
+                            headers: {
+                                'Content-Type': 'application/json',
+                                'Authorization': `Bearer ${token}`
+                            },
+                            body: JSON.stringify(updateData)
+                        });
+                    }
+                } else {
+                    // 创建用户
+                    response = await fetch(`${API_BASE}/api/auth/users`, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'Authorization': `Bearer ${token}`
+                        },
+                        body: JSON.stringify({
+                            username: username,
+                            email: email || null,
+                            role: role,
+                            password: password
+                        })
+                    });
+                }
+                
+                if (response.ok) {
+                    closeUserModal();
+                    await loadUsers();
+                } else {
+                    const error = await response.json();
+                    alert('操作失败: ' + (error.detail || '未知错误'));
+                }
+            } catch (error) {
+                alert('操作失败: ' + error.message);
+            }
+        });
+        
+        // 点击模态框外部关闭
+        document.getElementById('userModal').addEventListener('click', (e) => {
+            if (e.target.id === 'userModal') {
+                closeUserModal();
+            }
+        });
+        
+        // 修改密码
+        async function changeMyPassword() {
+            if (!currentUser) {
+                alert('无法获取当前用户信息');
+                return;
+            }
+            
+            const oldPassword = prompt('请输入当前密码:');
+            if (!oldPassword) {
+                return;
+            }
+            const newPassword = prompt('请输入新密码:');
+            if (!newPassword) {
+                return;
+            }
+            const confirmPassword = prompt('请再次输入新密码:');
+            if (newPassword !== confirmPassword) {
+                alert('两次输入的密码不一致');
+                return;
+            }
+            
+            try {
+                const response = await fetch(`${API_BASE}/api/auth/users/${currentUser.user_id}/change-password`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${token}`
+                    },
+                    body: JSON.stringify({
+                        old_password: oldPassword,
+                        new_password: newPassword
+                    })
+                });
+                
+                if (response.ok) {
+                    alert('密码修改成功！');
+                } else {
+                    const error = await response.json();
+                    alert('密码修改失败: ' + (error.detail || '未知错误'));
+                }
+            } catch (error) {
+                alert('密码修改失败: ' + error.message);
+            }
+        }
+        
+        // 退出登录
+        function logout() {
+            if (confirm('确定要退出登录吗？')) {
+                localStorage.removeItem('access_token');
+                localStorage.removeItem('user_info');
+                window.location.href = '/static/login.html';
+            }
+        }
+        
+        // 初始化用户下拉菜单
+        function initUserDropdown() {
+            const userDropdownBtn = document.getElementById('userDropdownBtn');
+            const userDropdownMenu = document.getElementById('userDropdownMenu');
+            if (!userDropdownBtn || !userDropdownMenu) return;
+            
+            let hideTimeout = null;
+            
+            // 悬停显示菜单
+            userDropdownBtn.addEventListener('mouseenter', function() {
+                if (hideTimeout) {
+                    clearTimeout(hideTimeout);
+                    hideTimeout = null;
+                }
+                userDropdownBtn.style.background = 'rgba(0, 0, 0, 0.05)';
+                userDropdownMenu.style.display = 'block';
+                setTimeout(() => {
+                    userDropdownMenu.style.opacity = '1';
+                    userDropdownMenu.style.transform = 'translateY(0)';
+                    userDropdownMenu.style.pointerEvents = 'auto';
+                }, 10);
+            });
+            
+            userDropdownBtn.addEventListener('mouseleave', function() {
+                userDropdownBtn.style.background = 'transparent';
+                hideTimeout = setTimeout(function() {
+                    userDropdownMenu.style.opacity = '0';
+                    userDropdownMenu.style.transform = 'translateY(-5px)';
+                    userDropdownMenu.style.pointerEvents = 'none';
+                    setTimeout(() => {
+                        userDropdownMenu.style.display = 'none';
+                    }, 200);
+                }, 150);
+            });
+            
+            userDropdownMenu.addEventListener('mouseenter', function() {
+                if (hideTimeout) {
+                    clearTimeout(hideTimeout);
+                    hideTimeout = null;
+                }
+                userDropdownBtn.style.background = 'rgba(0, 0, 0, 0.05)';
+            });
+            
+            userDropdownMenu.addEventListener('mouseleave', function() {
+                userDropdownBtn.style.background = 'transparent';
+                hideTimeout = setTimeout(function() {
+                    userDropdownMenu.style.opacity = '0';
+                    userDropdownMenu.style.transform = 'translateY(-5px)';
+                    userDropdownMenu.style.pointerEvents = 'none';
+                    setTimeout(() => {
+                        userDropdownMenu.style.display = 'none';
+                    }, 200);
+                }, 150);
+            });
+        }
+        
+        // 初始化
+        console.log('Initializing user management page...');
+        loadCurrentUser().then(() => {
+            // 显示当前用户信息
+            if (currentUser) {
+                const roleNames = {
+                    'super_admin': '超级管理员',
+                    'admin': '管理员',
+                    'operator': '运维人员',
+                    'user': '普通用户'
+                };
+                
+                // 更新按钮中的用户名
+                const userNameItem = document.getElementById('currentUserName');
+                const userRoleItem = document.getElementById('currentUserRole');
+                if (userNameItem) {
+                    userNameItem.textContent = currentUser.username;
+                }
+                if (userRoleItem) {
+                    userRoleItem.textContent = roleNames[currentUser.role] || currentUser.role;
+                }
+                
+                // 更新下拉菜单中的用户信息
+                const userDisplayName = document.getElementById('currentUserDisplayName');
+                const userDisplayRole = document.getElementById('currentUserDisplayRole');
+                const userAvatar = document.getElementById('userAvatar');
+                const userAvatarLarge = document.getElementById('userAvatarLarge');
+                
+                if (userDisplayName) {
+                    userDisplayName.textContent = currentUser.username;
+                }
+                if (userDisplayRole) {
+                    userDisplayRole.textContent = roleNames[currentUser.role] || currentUser.role;
+                }
+                if (userAvatar) {
+                    userAvatar.textContent = currentUser.username.charAt(0).toUpperCase();
+                }
+                if (userAvatarLarge) {
+                    userAvatarLarge.textContent = currentUser.username.charAt(0).toUpperCase();
+                }
+            }
+            // 确保在用户信息加载后再加载用户列表
+            loadUsers();
+        }).catch(error => {
+            console.error('Failed to load current user:', error);
+            // 即使当前用户加载失败，也尝试加载用户列表
+            loadUsers();
+        });
+        initUserDropdown();
+    </script>
+</body>
+</html>
+

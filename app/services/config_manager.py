@@ -61,7 +61,7 @@ class ConfigManager:
                 "deadlock_threshold": 10.0,  # 死锁判定阈值（秒，通用）
                 "narrow_passage_deadlock_threshold": 3.0,  # 窄道死锁判定阈值（秒）
                 "circular_wait_deadlock_threshold": 10.0,  # 循环等待死锁判定阈值（秒）
-                "mutual_blocking_deadlock_threshold": 3.0,  # 相互阻塞死锁判定阈值（秒，降低以更快响应）
+                "mutual_blocking_deadlock_threshold": 2.0,  # 相互阻塞死锁判定阈值（秒，降低以更快响应）
                 "narrow_passage_threshold": 1.0,  # 窄道阈值（米）
                 "narrow_passage_backoff_distance": 1.0,  # 窄道死锁后退距离（米）
                 "circular_wait_backoff_distance": 1.5,  # 循环等待死锁后退距离（米）

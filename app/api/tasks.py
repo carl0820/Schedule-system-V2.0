@@ -10,6 +10,8 @@ from app.models.task import Task, TaskCreate, TaskStatus, MultiActionTaskCreate,
 from app.services.task_scheduler import TaskScheduler, get_task_scheduler
 from app.services.map_manager import MapManager, get_map_manager
 from app.services.robot_manager import RobotManager, get_robot_manager
+from app.core.auth import get_current_user
+from app.models.user import User
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -18,6 +20,7 @@ logger = logging.getLogger(__name__)
 @router.post("/", response_model=Task)
 async def create_task(
     task: TaskCreate,
+    current_user: User = Depends(get_current_user),
     task_scheduler: TaskScheduler = Depends(get_task_scheduler),
     map_manager: MapManager = Depends(get_map_manager)
 ):
@@ -82,6 +85,7 @@ async def create_task(
 @router.get("/{task_id}", response_model=Task)
 async def get_task(
     task_id: str,
+    current_user: User = Depends(get_current_user),
     task_scheduler: TaskScheduler = Depends(get_task_scheduler)
 ):
     """
@@ -362,6 +366,7 @@ async def list_tasks(
 @router.delete("/{task_id}", response_model=dict)
 async def cancel_task(
     task_id: str,
+    current_user: User = Depends(get_current_user),
     task_scheduler: TaskScheduler = Depends(get_task_scheduler)
 ):
     """
@@ -383,6 +388,7 @@ async def cancel_task(
 @router.post("/multi-action", response_model=Task)
 async def create_multi_action_task(
     task: MultiActionTaskCreate,
+    current_user: User = Depends(get_current_user),
     task_scheduler: TaskScheduler = Depends(get_task_scheduler),
     map_manager: MapManager = Depends(get_map_manager)
 ):

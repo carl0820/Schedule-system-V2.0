@@ -9,7 +9,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
-from app.api import robots, tasks, maps, system, visualization
+from app.api import robots, tasks, maps, system, visualization, auth
 from app.services.robot_manager import get_robot_manager
 from config import settings
 
@@ -68,6 +68,7 @@ app.add_middleware(
 )
 
 # 注册路由
+app.include_router(auth.router, prefix="/api/auth", tags=["认证"])
 app.include_router(robots.router, prefix="/api/robots", tags=["机器人管理"])
 app.include_router(tasks.router, prefix="/api/tasks", tags=["任务管理"])
 app.include_router(maps.router, prefix="/api/maps", tags=["地图管理"])

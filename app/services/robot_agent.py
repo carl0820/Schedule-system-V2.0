@@ -71,12 +71,15 @@ class RobotAgent:
         # 配置连接限制：减少连接池大小，避免连接问题
         limits = httpx.Limits(max_keepalive_connections=2, max_connections=5)
         # 创建httpx客户端，使用更宽松的配置
+        # 显式禁用代理，避免使用环境变量中的代理设置（代理可能不可用）
+        # 使用 trust_env=False 来禁用环境变量中的代理设置
         self.client = httpx.AsyncClient(
             timeout=timeout_config,
             limits=limits,
             follow_redirects=True,
             http2=False,  # 禁用HTTP/2，使用HTTP/1.1
-            verify=False  # 禁用SSL验证（如果机器人使用自签名证书）
+            verify=False,  # 禁用SSL验证（如果机器人使用自签名证书）
+            trust_env=False  # 禁用环境变量中的代理设置，直接连接机器人
         )
         # 线程池执行器，用于执行同步的requests请求（fallback）
         self._executor = ThreadPoolExecutor(max_workers=2)
@@ -103,13 +106,15 @@ class RobotAgent:
         loop = asyncio.get_event_loop()
         try:
             logger.debug(f"Robot {self.robot_id} using requests fallback for {url}")
+            # 显式禁用代理，避免使用环境变量中的代理设置（代理可能不可用）
             response = await loop.run_in_executor(
                 self._executor,
                 lambda: requests.get(
                     url,
                     timeout=timeout,
                     verify=False,
-                    allow_redirects=True
+                    allow_redirects=True,
+                    proxies={'http': None, 'https': None}  # 禁用代理
                 )
             )
             response.raise_for_status()
@@ -139,6 +144,7 @@ class RobotAgent:
         loop = asyncio.get_event_loop()
         try:
             logger.debug(f"Robot {self.robot_id} using requests fallback for POST {url}")
+            # 显式禁用代理，避免使用环境变量中的代理设置（代理可能不可用）
             response = await loop.run_in_executor(
                 self._executor,
                 lambda: requests.post(
@@ -146,7 +152,8 @@ class RobotAgent:
                     json=data,
                     timeout=timeout,
                     verify=False,
-                    allow_redirects=True
+                    allow_redirects=True,
+                    proxies={'http': None, 'https': None}  # 禁用代理
                 )
             )
             response.raise_for_status()
@@ -189,12 +196,14 @@ class RobotAgent:
                 
                 # 优先使用临时客户端（避免连接池问题，特别是在VPN环境下）
                 # 临时客户端每次都是新的连接，更可靠
-                # 不设置代理参数，让httpx使用系统默认设置（VPN环境下可能需要）
+                # 显式禁用代理，避免使用环境变量中的代理设置（代理可能不可用）
+                # 使用 trust_env=False 来禁用环境变量中的代理设置
                 async with httpx.AsyncClient(
                     timeout=request_timeout,
                     follow_redirects=True,
                     http2=False,
-                    verify=False
+                    verify=False,
+                    trust_env=False  # 禁用环境变量中的代理设置，直接连接机器人
                 ) as temp_client:
                     response = await temp_client.get(url, timeout=request_timeout)
                 
@@ -311,12 +320,14 @@ class RobotAgent:
                 
                 # 优先使用临时客户端（避免连接池问题，特别是在VPN环境下）
                 # 临时客户端每次都是新的连接，更可靠
-                # 不设置代理参数，让httpx使用系统默认设置（VPN环境下可能需要）
+                # 显式禁用代理，避免使用环境变量中的代理设置（代理可能不可用）
+                # 使用 trust_env=False 来禁用环境变量中的代理设置
                 async with httpx.AsyncClient(
                     timeout=request_timeout,
                     follow_redirects=True,
                     http2=False,
-                    verify=False
+                    verify=False,
+                    trust_env=False  # 禁用环境变量中的代理设置，直接连接机器人
                 ) as temp_client:
                     response = await temp_client.post(url, json=data, timeout=request_timeout)
                 

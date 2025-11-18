@@ -9,6 +9,8 @@ import logging
 from urllib.parse import urlparse
 from app.models.robot import RobotState, RobotStatus, RegisterRequest
 from app.services.robot_manager import RobotManager, get_robot_manager
+from app.core.auth import get_current_user, can_manage_robots
+from app.models.user import User
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -60,6 +62,7 @@ def extract_host_from_url(url: str) -> str:
 @router.post("/register", response_model=dict)
 async def register_robot(
     request: RegisterRequest,
+    current_user: User = Depends(get_current_user),
     robot_manager: RobotManager = Depends(get_robot_manager)
 ):
     """
@@ -177,6 +180,7 @@ async def register_robot(
 @router.delete("/{robot_id}", response_model=dict)
 async def unregister_robot(
     robot_id: str,
+    current_user: User = Depends(get_current_user),
     robot_manager: RobotManager = Depends(get_robot_manager)
 ):
     """
@@ -198,6 +202,7 @@ async def unregister_robot(
 
 @router.get("/", response_model=List[dict])
 async def list_robots(
+    current_user: User = Depends(get_current_user),
     robot_manager: RobotManager = Depends(get_robot_manager)
 ):
     """
@@ -319,6 +324,7 @@ async def debug_robot_connection(
 @router.post("/{robot_id}/go-home", response_model=dict)
 async def go_home(
     robot_id: str,
+    current_user: User = Depends(get_current_user),
     robot_manager: RobotManager = Depends(get_robot_manager)
 ):
     """
@@ -340,24 +346,55 @@ async def go_home(
         logger.info(f"Sending robot {robot_id} home, base_url: {agent.base_url}")
         # 调用机器人回桩
         result = await agent.go_home()
-        logger.info(f"Robot {robot_id} go-home command sent successfully, action_id: {result.action_id if result else None}")
         
-        return {
-            "success": True,
-            "robot_id": robot_id,
-            "action_id": result.action_id if result else None,
-            "message": f"Robot {robot_id} is returning to charging dock"
-        }
+        # 检查回桩结果
+        if result:
+            action_id = result.action_id
+            # 检查action状态，看是否立即失败
+            if result.state:
+                result_code = result.state.get("result")
+                reason = result.state.get("reason", "")
+                status = result.state.get("status")
+                
+                # 如果action立即失败，返回错误信息
+                if result_code == -1:
+                    error_msg = f"回桩失败: {reason}" if reason else "回桩失败: 未知错误"
+                    if "DOCK_ID_NOT_FOUND" in reason or "dock" in reason.lower():
+                        error_msg = "回桩失败: 未找到充电桩ID。请检查机器人配置，确保充电桩已正确设置。"
+                    logger.error(f"Robot {robot_id} go-home failed immediately: {error_msg}")
+                    raise HTTPException(
+                        status_code=400, 
+                        detail=error_msg
+                    )
+            
+            logger.info(f"Robot {robot_id} go-home command sent successfully, action_id: {action_id}")
+            return {
+                "success": True,
+                "robot_id": robot_id,
+                "action_id": action_id,
+                "message": f"Robot {robot_id} is returning to charging dock"
+            }
+        else:
+            logger.error(f"Robot {robot_id} go-home command returned no result")
+            raise HTTPException(
+                status_code=500, 
+                detail="回桩命令执行失败：未收到有效响应"
+            )
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Failed to send robot {robot_id} home: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Failed to send robot home: {str(e)}")
+        error_detail = str(e)
+        # 如果是DOCK_ID_NOT_FOUND错误，提供更友好的提示
+        if "DOCK_ID_NOT_FOUND" in error_detail or "dock" in error_detail.lower():
+            error_detail = "未找到充电桩ID。请检查机器人配置，确保充电桩已正确设置。"
+        raise HTTPException(status_code=500, detail=f"回桩失败: {error_detail}")
 
 
 @router.post("/{robot_id}/sync-map", response_model=dict)
 async def sync_map(
     robot_id: str,
+    current_user: User = Depends(get_current_user),
     robot_manager: RobotManager = Depends(get_robot_manager)
 ):
     """
