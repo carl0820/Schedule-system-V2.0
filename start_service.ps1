@@ -89,6 +89,25 @@ try {
     
     # Wait for service to start
     Write-Host "Waiting for service to initialize..." -ForegroundColor Yellow
+    Write-Host "  (This may take 10-30 seconds while loading robots and maps)" -ForegroundColor Gray
+    
+    # Wait for port to be listening (with timeout)
+    $maxWait = 30  # Maximum wait time in seconds
+    $waited = 0
+    $checkInterval = 2  # Check every 2 seconds
+    
+    while ($waited -lt $maxWait) {
+        $portCheck = Get-NetTCPConnection -LocalPort 8000 -ErrorAction SilentlyContinue
+        if ($portCheck) {
+            Write-Host "  [OK] Port 8000 is now listening" -ForegroundColor Green
+            break
+        }
+        Start-Sleep -Seconds $checkInterval
+        $waited += $checkInterval
+        Write-Host "  Waiting... ($waited/$maxWait seconds)" -ForegroundColor Gray
+    }
+    
+    # Additional wait for service to fully initialize (after port is listening)
     Start-Sleep -Seconds 3
     
     # Check if service started successfully

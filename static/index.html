@@ -1205,11 +1205,11 @@
             // 如果初始状态是connecting，保持connecting状态，等待请求结果
             
             // 创建带超时的 AbortController
-            // 增加超时时间到30秒，因为可能需要从多个机器人获取数据
+            // 增加超时时间到45秒，因为服务启动时需要加载机器人、地图等，可能需要更长时间
             const controller = new AbortController();
             currentRequestController = controller; // 保存控制器引用
             let timeoutId = null; // 声明变量
-            timeoutId = setTimeout(() => controller.abort(), 30000); // 30秒超时
+            timeoutId = setTimeout(() => controller.abort(), 45000); // 45秒超时
             
             try {
                 const response = await fetch(`${API_BASE}/api/visualization/data`, {
