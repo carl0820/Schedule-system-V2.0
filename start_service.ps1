@@ -37,8 +37,32 @@ if (Test-Path "venv\Scripts\python.exe") {
     $pythonPath = "venv\bin\python.exe"
     Write-Host "[OK] Using virtual environment: venv\bin\python.exe" -ForegroundColor Green
 } else {
-    $pythonPath = "python"
-    Write-Host "[WARN] Virtual environment not found, using system Python" -ForegroundColor Yellow
+    # Try to find Python 3.x in common locations
+    $pythonCandidates = @(
+        "$env:LOCALAPPDATA\Programs\Python\Python313\python.exe",
+        "$env:LOCALAPPDATA\Programs\Python\Python312\python.exe",
+        "$env:LOCALAPPDATA\Programs\Python\Python311\python.exe",
+        "$env:ProgramFiles\Python313\python.exe",
+        "$env:ProgramFiles\Python312\python.exe",
+        "$env:ProgramFiles\Python311\python.exe"
+    )
+    
+    $foundPython = $null
+    foreach ($candidate in $pythonCandidates) {
+        if (Test-Path $candidate) {
+            $foundPython = $candidate
+            break
+        }
+    }
+    
+    if ($foundPython) {
+        $pythonPath = $foundPython
+        Write-Host "[OK] Using Python: $pythonPath" -ForegroundColor Green
+    } else {
+        $pythonPath = "python"
+        Write-Host "[WARN] Virtual environment not found, using system Python" -ForegroundColor Yellow
+        Write-Host "[INFO] If you encounter issues, please specify Python path explicitly" -ForegroundColor Yellow
+    }
 }
 
 # Check if main.py exists

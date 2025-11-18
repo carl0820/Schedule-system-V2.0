@@ -28,11 +28,18 @@ cd schedule-system-based-on-REST
 打开PowerShell，进入项目目录，运行：
 
 ```powershell
-# 推荐：使用安装脚本（自动处理网络问题）
+# 推荐：使用Python安装脚本（跨平台，自动处理网络问题）
+python install_deps.py
+```
+
+如果Python脚本不可用，使用PowerShell脚本：
+
+```powershell
+# 方法2: 使用PowerShell脚本（Windows）
 .\install_deps_simple.ps1
 ```
 
-如果脚本不可用，手动安装：
+如果脚本都不可用，手动安装：
 
 ```powershell
 pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
