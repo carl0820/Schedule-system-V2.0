@@ -75,6 +75,10 @@ async def register_robot(
     Args:
         request: 注册请求体，包含robot_id和base_url
     """
+    # 检查权限：只有超级管理员、管理员、运维人员可以注册机器人
+    if not can_manage_robots(current_user):
+        raise HTTPException(status_code=403, detail="Permission denied: Only administrators and operators can register robots")
+    
     try:
         robot_id = request.robot_id
         base_url = request.base_url
@@ -189,6 +193,10 @@ async def unregister_robot(
     Args:
         robot_id: 机器人ID
     """
+    # 检查权限：只有超级管理员、管理员、运维人员可以注销机器人
+    if not can_manage_robots(current_user):
+        raise HTTPException(status_code=403, detail="Permission denied: Only administrators and operators can unregister robots")
+    
     try:
         success = await robot_manager.unregister_robot(robot_id)
         if not success:
@@ -336,6 +344,9 @@ async def go_home(
     Returns:
         回桩操作结果，包含 action_id 等信息
     """
+    # 检查权限：所有角色都可以让机器人回桩（这是基本操作）
+    # 不需要权限检查，所有登录用户都可以操作
+    
     logger.info(f"Received go-home request for robot: {robot_id}")
     try:
         agent = robot_manager.get_robot_agent(robot_id)
@@ -406,6 +417,9 @@ async def sync_map(
     Returns:
         同步地图操作结果
     """
+    # 检查权限：所有角色都可以同步地图（这是基本操作）
+    # 不需要权限检查，所有登录用户都可以操作
+    
     logger.info(f"Received sync-map request for robot: {robot_id}")
     try:
         agent = robot_manager.get_robot_agent(robot_id)

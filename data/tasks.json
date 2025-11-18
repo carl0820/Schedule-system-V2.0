@@ -11243,7 +11243,107 @@
       "is_multi_action": false,
       "actions": null,
       "current_action_index": 0
+    },
+    {
+      "task_id": "22f4b17b-7c7f-4a6e-bb22-65e7e26de3d5",
+      "robot_id": "phoebus",
+      "status": "completed",
+      "start_pose": null,
+      "target_pose": {
+        "x": 8.11,
+        "y": -4.12,
+        "z": 0.0,
+        "yaw": 0.0,
+        "pitch": 0.0,
+        "roll": 0.0
+      },
+      "priority": 2,
+      "action_id": 53,
+      "created_at": "2025-11-18 17:20:41.254219",
+      "assigned_at": "2025-11-18 17:21:03.266612",
+      "started_at": "2025-11-18 17:21:03.329821",
+      "completed_at": "2025-11-18 17:21:20.143669",
+      "error_message": null,
+      "retry_count": 0,
+      "is_multi_action": false,
+      "actions": null,
+      "current_action_index": 0
+    },
+    {
+      "task_id": "4ceeef62-802f-46da-99cc-acbc7b1cc0ac",
+      "robot_id": "robot2",
+      "status": "failed",
+      "start_pose": null,
+      "target_pose": {
+        "x": 3.41,
+        "y": -4.17,
+        "z": 0.0,
+        "yaw": 0.0,
+        "pitch": 0.0,
+        "roll": 0.0
+      },
+      "priority": 3,
+      "action_id": 31,
+      "created_at": "2025-11-18 17:20:48.959307",
+      "assigned_at": "2025-11-18 17:21:37.688615",
+      "started_at": "2025-11-18 17:21:37.815488",
+      "completed_at": "2025-11-18 17:21:44.255311",
+      "error_message": "CANNOT_REACH_TARGET",
+      "retry_count": 0,
+      "is_multi_action": false,
+      "actions": null,
+      "current_action_index": 0
+    },
+    {
+      "task_id": "f7450adb-8676-4e0e-b8e8-56962be56d24",
+      "robot_id": "p3_1",
+      "status": "cancelled",
+      "start_pose": null,
+      "target_pose": {
+        "x": 3.26,
+        "y": -7.02,
+        "z": 0.0,
+        "yaw": 0.0,
+        "pitch": 0.0,
+        "roll": 0.0
+      },
+      "priority": 2,
+      "action_id": 776,
+      "created_at": "2025-11-18 17:20:53.224958",
+      "assigned_at": "2025-11-18 17:21:24.064854",
+      "started_at": "2025-11-18 17:21:24.437481",
+      "completed_at": "2025-11-18 17:21:26.254614",
+      "error_message": null,
+      "retry_count": 0,
+      "is_multi_action": false,
+      "actions": null,
+      "current_action_index": 0
+    },
+    {
+      "task_id": "1703192b-02c2-4e75-9049-0d8b85752a4d",
+      "robot_id": "robot2",
+      "status": "completed",
+      "start_pose": null,
+      "target_pose": {
+        "x": 13.4,
+        "y": -5.46,
+        "z": 0.0,
+        "yaw": 0.0,
+        "pitch": 0.0,
+        "roll": 0.0
+      },
+      "priority": 2,
+      "action_id": 30,
+      "created_at": "2025-11-18 17:21:01.044981",
+      "assigned_at": "2025-11-18 17:21:13.568528",
+      "started_at": "2025-11-18 17:21:13.779523",
+      "completed_at": "2025-11-18 17:21:24.278610",
+      "error_message": null,
+      "retry_count": 0,
+      "is_multi_action": false,
+      "actions": null,
+      "current_action_index": 0
     }
   ],
-  "last_updated": "2025-11-18T16:49:53.545126"
+  "last_updated": "2025-11-18T17:21:44.275266"
 }

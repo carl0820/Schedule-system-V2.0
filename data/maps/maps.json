@@ -1,27 +1,4 @@
 {
-  "5d87b06f-78b2-480e-886e-05552f13aec4": {
-    "map_id": "5d87b06f-78b2-480e-886e-05552f13aec4",
-    "name": "杨浦5F_phoebus",
-    "description": null,
-    "robot_id": "phoebus",
-    "is_default": false,
-    "created_at": "2025-11-14T12:59:05.650566",
-    "updated_at": "2025-11-14T12:59:05.650566",
-    "file_path": "5d87b06f-78b2-480e-886e-05552f13aec4.bin.gz",
-    "thumbnail_path": null,
-    "metadata": {
-      "width": 884,
-      "height": 516,
-      "resolution": 0.05000000074505806,
-      "origin_x": -13.099996566772461,
-      "origin_y": -14.099996566772461,
-      "min_x": -13.099996566772461,
-      "min_y": -14.099996566772461,
-      "max_x": 31.100004091858864,
-      "max_y": 11.700003817677498
-    },
-    "file_size": 456180
-  },
   "55cb6f58-768f-4793-827c-548f1f993025": {
     "map_id": "55cb6f58-768f-4793-827c-548f1f993025",
     "name": "杨浦5F_P3",

@@ -333,7 +333,9 @@
         const originalFetch = window.fetch;
         window.fetch = function(...args) {
             const [url, options = {}] = args;
-            if (typeof url === 'string' && url.startsWith('/api/')) {
+            const urlString = typeof url === 'string' ? url : url.toString();
+            // 检查 URL 是否包含 /api/ 路径（支持相对路径和绝对路径）
+            if (urlString.includes('/api/')) {
                 options.headers = {
                     ...options.headers,
                     'Authorization': `Bearer ${token}`
