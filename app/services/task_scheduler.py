@@ -1675,10 +1675,10 @@ class TaskScheduler:
                 # 获取机器人当前位置
                 state = await self.robot_manager.get_robot_state(robot_id)
                 if not state or not state.pose:
-                    # 如果超时（30秒），强制恢复任务执行
-                    if start_time and (now - start_time).total_seconds() > 30.0:
+                    # 如果超时（60秒），强制恢复任务执行（增加超时时间，给死锁解除更多时间）
+                    if start_time and (now - start_time).total_seconds() > 60.0:
                         logger.warning(
-                            f"Robot {robot_id} timeout reaching waiting point (30s), "
+                            f"Robot {robot_id} timeout reaching waiting point (60s), "
                             f"forcing task {task_id} resume"
                         )
                         await self._resume_task_after_deadlock_resolution(task, robot_id)
@@ -1718,10 +1718,10 @@ class TaskScheduler:
                     )
                     await self._resume_task_after_deadlock_resolution(task, robot_id)
                     robots_to_remove.append(robot_id)
-                elif start_time and (now - start_time).total_seconds() > 30.0:
-                    # 超时，强制恢复
+                elif start_time and (now - start_time).total_seconds() > 60.0:
+                    # 超时，强制恢复（增加超时时间到60秒）
                     logger.warning(
-                        f"Robot {robot_id} timeout reaching waiting point (30s, distance={distance:.2f}m), "
+                        f"Robot {robot_id} timeout reaching waiting point (60s, distance={distance:.2f}m), "
                         f"forcing task {task_id} resume"
                     )
                     await self._resume_task_after_deadlock_resolution(task, robot_id)
@@ -1922,8 +1922,8 @@ class TaskScheduler:
                                     logger.info(
                                         f"Task {task.task_id} completed (distance to target: {distance:.2f}m <= {acceptable_precision}m)"
                                     )
-                                elif execution_time > 30.0:
-                                    # 如果执行时间超过30秒且未到达目标，可能是死锁，触发死锁检测
+                                elif execution_time > 15.0:
+                                    # 如果执行时间超过15秒且未到达目标，可能是死锁，触发死锁检测（降低阈值）
                                     logger.warning(
                                         f"Task {task.task_id} action status is None, robot not at target "
                                         f"(distance={distance:.2f}m, execution_time={execution_time:.1f}s). "
@@ -1974,20 +1974,28 @@ class TaskScheduler:
                         # 检查是否是因为无法到达目标而失败（可能是死锁导致）
                         # 如果机器人距离目标较近，可能是被阻塞，尝试触发死锁检测和恢复
                         try:
+                            # 首先检查机器人是否正在死锁解除中，如果是，不要标记为失败
+                            if task.robot_id in self.robots_in_deadlock_resolution:
+                                logger.info(
+                                    f"Task {task.task_id} failed but robot {task.robot_id} is in deadlock resolution, "
+                                    f"will not mark as failed, waiting for resolution to complete"
+                                )
+                                continue  # 继续监控，不标记为失败
+                            
                             robot_state = await self.robot_manager.get_robot_state(task.robot_id)
                             if robot_state and robot_state.pose and task.target_pose:
                                 current = robot_state.pose
                                 target = task.target_pose
                                 distance = math.sqrt((current.x - target.x) ** 2 + (current.y - target.y) ** 2)
                                 
-                                # 如果距离目标较近（< 5米），可能是被阻塞，尝试恢复
-                                if distance < 5.0:
+                                # 如果距离目标较近（< 8米），可能是被阻塞，尝试恢复
+                                if distance < 8.0:
                                     execution_time = 0.0
                                     if task.started_at:
                                         execution_time = (datetime.now() - task.started_at).total_seconds()
                                     
-                                    # 如果执行时间较长，可能是死锁，触发死锁检测
-                                    if execution_time > 20.0:
+                                    # 如果执行时间较长，可能是死锁，触发死锁检测（降低阈值到10秒）
+                                    if execution_time > 10.0:
                                         logger.warning(
                                             f"Task {task.task_id} failed but robot is close to target "
                                             f"(distance={distance:.2f}m, execution_time={execution_time:.1f}s). "
@@ -1996,11 +2004,11 @@ class TaskScheduler:
                                         # 触发死锁检测（异步，不阻塞）
                                         asyncio.create_task(self._trigger_deadlock_detection_for_robot(task.robot_id))
                                         
-                                        # 尝试重新发送move_to指令（增加重试次数）
-                                        if task.retry_count < 3:  # 最多重试3次
+                                        # 尝试重新发送move_to指令（增加重试次数到5次）
+                                        if task.retry_count < 5:  # 最多重试5次
                                             task.retry_count += 1
                                             logger.info(
-                                                f"Retrying task {task.task_id} (retry {task.retry_count}/3) "
+                                                f"Retrying task {task.task_id} (retry {task.retry_count}/5) "
                                                 f"after failure, distance to target: {distance:.2f}m"
                                             )
                                             try:
@@ -2077,12 +2085,21 @@ class TaskScheduler:
                                     )
                                 else:
                                     # 机器人未到达目标，检查是否被阻塞（死锁）
+                                    # 首先检查机器人是否正在死锁解除中，如果是，不要取消任务
+                                    if task.robot_id in self.robots_in_deadlock_resolution:
+                                        logger.info(
+                                            f"Task {task.task_id} aborted but robot {task.robot_id} is in deadlock resolution, "
+                                            f"will not cancel task, waiting for resolution to complete"
+                                        )
+                                        continue  # 继续监控，不标记为取消
+                                    
                                     execution_time = 0.0
                                     if task.started_at:
                                         execution_time = (datetime.now() - task.started_at).total_seconds()
                                     
-                                    # 如果距离目标较近（< 5米）且执行时间较长，可能是死锁，尝试恢复
-                                    if distance < 5.0 and execution_time > 20.0:
+                                    # 如果距离目标较近（< 8米）且执行时间较长，可能是死锁，尝试恢复
+                                    # 降低距离阈值和执行时间阈值，更早触发死锁检测和重试
+                                    if distance < 8.0 and execution_time > 10.0:
                                         logger.warning(
                                             f"Task {task.task_id} aborted but robot is close to target "
                                             f"(distance={distance:.2f}m, execution_time={execution_time:.1f}s). "
@@ -2091,11 +2108,11 @@ class TaskScheduler:
                                         # 触发死锁检测（异步，不阻塞）
                                         asyncio.create_task(self._trigger_deadlock_detection_for_robot(task.robot_id))
                                         
-                                        # 尝试重新发送move_to指令（增加重试次数）
-                                        if task.retry_count < 3:  # 最多重试3次
+                                        # 尝试重新发送move_to指令（增加重试次数到5次）
+                                        if task.retry_count < 5:  # 最多重试5次
                                             task.retry_count += 1
                                             logger.info(
-                                                f"Retrying task {task.task_id} (retry {task.retry_count}/3) "
+                                                f"Retrying task {task.task_id} (retry {task.retry_count}/5) "
                                                 f"after abort, distance to target: {distance:.2f}m"
                                             )
                                             try:

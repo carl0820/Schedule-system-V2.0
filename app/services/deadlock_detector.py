@@ -100,7 +100,7 @@ class DeadlockDetector:
             # 不同死锁类型的阈值（如果未配置，使用通用阈值）
             self.narrow_passage_deadlock_threshold = config.get("narrow_passage_deadlock_threshold", 3.0)  # 窄道死锁3秒触发
             self.circular_wait_deadlock_threshold = config.get("circular_wait_deadlock_threshold", 10.0)  # 循环等待10秒
-            self.mutual_blocking_deadlock_threshold = config.get("mutual_blocking_deadlock_threshold", 8.0)  # 相互阻塞8秒
+            self.mutual_blocking_deadlock_threshold = config.get("mutual_blocking_deadlock_threshold", 1.5)  # 相互阻塞1.5秒（更快响应）
             self.narrow_passage_threshold = config.get("narrow_passage_threshold", 1.0)
             self.narrow_passage_backoff_distance = config.get("narrow_passage_backoff_distance", 1.0)
             self.circular_wait_backoff_distance = config.get("circular_wait_backoff_distance", 1.5)
@@ -139,7 +139,7 @@ class DeadlockDetector:
             self.deadlock_threshold = 10.0
             self.narrow_passage_deadlock_threshold = 3.0
             self.circular_wait_deadlock_threshold = 10.0
-            self.mutual_blocking_deadlock_threshold = 8.0
+            self.mutual_blocking_deadlock_threshold = 1.5
             self.narrow_passage_threshold = 1.0
             self.narrow_passage_backoff_distance = 1.0
             self.circular_wait_backoff_distance = 1.5
@@ -1898,20 +1898,27 @@ class DeadlockDetector:
             # 5. 机器人ID（确保确定性）
             robot_info.sort(key=lambda x: (x[1], x[2], x[3], x[4], x[5]))
         
-        # 计算需要让行的机器人数量（支持4-8台机器人场景）
+        # 计算需要让行的机器人数量（支持4-8台机器人场景，使用更激进的策略）
         num_robots = len(robot_info)
         num_to_resolve = 1  # 默认只让1台机器人后退
         
-        if num_robots >= 6:
-            # 6台或更多机器人：让1/3的低优先级机器人后退
-            num_to_resolve = max(2, (num_robots + 2) // 3)
+        if num_robots >= 7:
+            # 7-8台机器人：让一半的低优先级机器人后退（更激进）
+            num_to_resolve = max(3, num_robots // 2)
             logger.info(
                 f"Large mutual blocking deadlock ({num_robots} robots), resolving {num_to_resolve} "
+                f"lowest priority robots (aggressive strategy)"
+            )
+        elif num_robots >= 5:
+            # 5-6台机器人：让一半的低优先级机器人后退
+            num_to_resolve = max(2, num_robots // 2)
+            logger.info(
+                f"Medium-large mutual blocking deadlock ({num_robots} robots), resolving {num_to_resolve} "
                 f"lowest priority robots"
             )
         elif num_robots >= 4:
-            # 4-5台机器人：让一半的低优先级机器人后退
-            num_to_resolve = max(2, num_robots // 2)
+            # 4台机器人：让一半的低优先级机器人后退（2台）
+            num_to_resolve = 2
             logger.info(
                 f"Medium mutual blocking deadlock ({num_robots} robots), resolving {num_to_resolve} "
                 f"lowest priority robots"
