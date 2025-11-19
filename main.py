@@ -230,10 +230,34 @@ async def startup_event():
 
 if __name__ == "__main__":
     import sys
+    import socket
+    
     logger.info(f"Starting uvicorn server on {settings.HOST}:{settings.PORT}")
     logger.info(f"Python version: {sys.version}")
     logger.info(f"Working directory: {os.getcwd()}")
     print(f"[INFO] Starting uvicorn server on {settings.HOST}:{settings.PORT}", flush=True)
+    
+    # 检查端口是否可用
+    def check_port_available(host, port):
+        """检查端口是否可用"""
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(1)
+            result = sock.connect_ex((host, port))
+            sock.close()
+            return result != 0  # 如果连接失败，说明端口可用
+        except Exception as e:
+            logger.warning(f"Port check failed: {e}")
+            return True  # 如果检查失败，假设端口可用
+    
+    # 检查端口是否被占用
+    if not check_port_available(settings.HOST, settings.PORT):
+        logger.error(f"Port {settings.PORT} is already in use or not accessible!")
+        print(f"[ERROR] Port {settings.PORT} is already in use or not accessible!", flush=True)
+        print(f"[INFO] Please stop the process using port {settings.PORT} or use a different port", flush=True)
+        print(f"[INFO] To check port usage: Get-NetTCPConnection -LocalPort {settings.PORT}", flush=True)
+        sys.exit(1)
+    
     try:
         # 确保uvicorn能够正常启动，即使启动事件中有问题
         uvicorn.run(
@@ -244,6 +268,23 @@ if __name__ == "__main__":
             log_level="info",
             access_log=True
         )
+    except OSError as e:
+        if e.winerror == 10013:  # Windows权限错误
+            logger.error(f"Permission denied binding to port {settings.PORT}. This may be due to:")
+            logger.error("1. Port is reserved by Windows (check with: netsh interface ipv4 show excludedportrange protocol=tcp)")
+            logger.error("2. Port is already in use by another process")
+            logger.error("3. Firewall or antivirus blocking the port")
+            logger.error("4. Need administrator privileges")
+            print(f"[ERROR] Permission denied binding to port {settings.PORT}", flush=True)
+            print("[INFO] Solutions:", flush=True)
+            print("  1. Check if port is reserved: netsh interface ipv4 show excludedportrange protocol=tcp", flush=True)
+            print("  2. Check if port is in use: Get-NetTCPConnection -LocalPort 8000", flush=True)
+            print("  3. Try using a different port (e.g., 8001) by setting PORT=8001 in .env file", flush=True)
+            print("  4. Run PowerShell as Administrator and try again", flush=True)
+        else:
+            logger.error(f"OS error binding to port {settings.PORT}: {e}", exc_info=True)
+            print(f"[ERROR] OS error: {e}", flush=True)
+        sys.exit(1)
     except KeyboardInterrupt:
         logger.info("Server stopped by user")
         print("[INFO] Server stopped by user", flush=True)

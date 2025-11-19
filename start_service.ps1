@@ -10,10 +10,21 @@ Write-Host "  Start Robot Scheduling Service" -ForegroundColor Cyan
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host ""
 
+# Get port from config (default 8092, as Windows reserves 7992-8091)
+$PORT = 8092
+try {
+    $configContent = Get-Content "config.py" -ErrorAction SilentlyContinue | Select-String -Pattern "PORT.*=.*(\d+)"
+    if ($configContent) {
+        $PORT = [int]($configContent.Matches.Groups[1].Value)
+    }
+} catch {
+    # Use default
+}
+
 # Check if service is already running
-$existingProcs = Get-NetTCPConnection -LocalPort 8000 -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique
+$existingProcs = Get-NetTCPConnection -LocalPort $PORT -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique
 if ($existingProcs) {
-    Write-Host "[WARN] Port 8000 is already in use (Process ID: $($existingProcs -join ', '))" -ForegroundColor Yellow
+    Write-Host "[WARN] Port $PORT is already in use (Process ID: $($existingProcs -join ', '))" -ForegroundColor Yellow
     Write-Host "   Service may already be running, please use stop_service.ps1 to stop it first" -ForegroundColor Yellow
     Write-Host ""
     $response = Read-Host "Do you want to force stop and restart? (y/N)"
@@ -97,9 +108,9 @@ try {
     $checkInterval = 2  # Check every 2 seconds
     
     while ($waited -lt $maxWait) {
-        $portCheck = Get-NetTCPConnection -LocalPort 8000 -ErrorAction SilentlyContinue
+        $portCheck = Get-NetTCPConnection -LocalPort $PORT -ErrorAction SilentlyContinue
         if ($portCheck) {
-            Write-Host "  [OK] Port 8000 is now listening" -ForegroundColor Green
+            Write-Host "  [OK] Port $PORT is now listening" -ForegroundColor Green
             break
         }
         Start-Sleep -Seconds $checkInterval
@@ -111,7 +122,7 @@ try {
     Start-Sleep -Seconds 3
     
     # Check if service started successfully
-    $checkProcs = Get-NetTCPConnection -LocalPort 8000 -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique
+    $checkProcs = Get-NetTCPConnection -LocalPort $PORT -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique
     if ($checkProcs) {
         Write-Host ""
         Write-Host "========================================" -ForegroundColor Green
@@ -119,14 +130,14 @@ try {
         Write-Host "========================================" -ForegroundColor Green
         Write-Host ""
         Write-Host "  Process ID: $($checkProcs -join ', ')" -ForegroundColor Cyan
-        Write-Host "  Service URL: http://localhost:8000" -ForegroundColor Cyan
-        Write-Host "  API Docs: http://localhost:8000/docs" -ForegroundColor Cyan
-        Write-Host "  Homepage: http://localhost:8000/" -ForegroundColor Cyan
+        Write-Host "  Service URL: http://localhost:$PORT" -ForegroundColor Cyan
+        Write-Host "  API Docs: http://localhost:$PORT/docs" -ForegroundColor Cyan
+        Write-Host "  Homepage: http://localhost:$PORT/" -ForegroundColor Cyan
         Write-Host ""
         
         # Try to check service health
         try {
-            $response = Invoke-RestMethod -Uri "http://localhost:8000/health" -TimeoutSec 2 -ErrorAction SilentlyContinue
+            $response = Invoke-RestMethod -Uri "http://localhost:$PORT/health" -TimeoutSec 2 -ErrorAction SilentlyContinue
             if ($response.status -eq "healthy") {
                 Write-Host "[OK] Service health check: OK" -ForegroundColor Green
             } else {

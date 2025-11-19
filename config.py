@@ -25,7 +25,7 @@ class Settings(BaseSettings):
     
     # 服务器配置
     HOST: str = "0.0.0.0"
-    PORT: int = 8000
+    PORT: int = 8092  # 改为8092，因为Windows保留了7992-8091端口范围
     
     # 数据库配置
     REDIS_HOST: str = "localhost"
