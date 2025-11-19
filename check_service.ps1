@@ -6,13 +6,24 @@ Write-Host "  Service Status Check" -ForegroundColor Cyan
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host ""
 
-# Check if port 8000 is listening
-$portCheck = Get-NetTCPConnection -LocalPort 8000 -ErrorAction SilentlyContinue
+# Get port from config (default 8092)
+$PORT = 8092
+try {
+    $configContent = Get-Content "config.py" -ErrorAction SilentlyContinue | Select-String -Pattern "PORT.*=.*(\d+)"
+    if ($configContent) {
+        $PORT = [int]($configContent.Matches.Groups[1].Value)
+    }
+} catch {
+    # Use default
+}
+
+# Check if port is listening
+$portCheck = Get-NetTCPConnection -LocalPort $PORT -ErrorAction SilentlyContinue
 if ($portCheck) {
-    Write-Host "[OK] Port 8000 is listening" -ForegroundColor Green
+    Write-Host "[OK] Port $PORT is listening" -ForegroundColor Green
     Write-Host "  Process ID: $($portCheck.OwningProcess -join ', ')" -ForegroundColor Cyan
 } else {
-    Write-Host "[WARN] Port 8000 is not listening" -ForegroundColor Yellow
+    Write-Host "[WARN] Port $PORT is not listening" -ForegroundColor Yellow
 }
 
 Write-Host ""
@@ -32,7 +43,7 @@ Write-Host ""
 
 # Try to access the service
 try {
-    $response = Invoke-WebRequest -Uri "http://localhost:8000/health" -TimeoutSec 2 -ErrorAction Stop
+    $response = Invoke-WebRequest -Uri "http://localhost:$PORT/health" -TimeoutSec 2 -ErrorAction Stop
     Write-Host "[OK] Service is responding" -ForegroundColor Green
     Write-Host "  Status: $($response.StatusCode)" -ForegroundColor Cyan
     try {

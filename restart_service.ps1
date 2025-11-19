@@ -15,8 +15,19 @@ Write-Host ""
 Write-Host "[1/2] Stopping existing service..." -ForegroundColor Yellow
 Write-Host ""
 
-# Find processes running on port 8000
-$procs = Get-NetTCPConnection -LocalPort 8000 -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique
+# Get port from config (default 8092)
+$PORT = 8092
+try {
+    $configContent = Get-Content "config.py" -ErrorAction SilentlyContinue | Select-String -Pattern "PORT.*=.*(\d+)"
+    if ($configContent) {
+        $PORT = [int]($configContent.Matches.Groups[1].Value)
+    }
+} catch {
+    # Use default
+}
+
+# Find processes running on port
+$procs = Get-NetTCPConnection -LocalPort $PORT -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique
 
 if ($procs) {
     Write-Host "Found running service processes: $($procs -join ', ')" -ForegroundColor Cyan
@@ -38,9 +49,9 @@ if ($procs) {
     Start-Sleep -Seconds 2
     
     # Verify if stopped
-    $remainingProcs = Get-NetTCPConnection -LocalPort 8000 -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique
+    $remainingProcs = Get-NetTCPConnection -LocalPort $PORT -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique
     if ($remainingProcs) {
-        Write-Host "[WARN] There are still processes using port 8000, trying to force stop..." -ForegroundColor Yellow
+        Write-Host "[WARN] There are still processes using port $PORT, trying to force stop..." -ForegroundColor Yellow
         foreach ($procId in $remainingProcs) {
             try {
                 Stop-Process -Id $procId -Force -ErrorAction Stop
@@ -99,7 +110,7 @@ try {
     Start-Sleep -Seconds 3
     
     # Check if service started successfully
-    $checkProcs = Get-NetTCPConnection -LocalPort 8000 -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique
+    $checkProcs = Get-NetTCPConnection -LocalPort $PORT -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique
     if ($checkProcs) {
         Write-Host ""
         Write-Host "========================================" -ForegroundColor Green
@@ -107,14 +118,14 @@ try {
         Write-Host "========================================" -ForegroundColor Green
         Write-Host ""
         Write-Host "  Process ID: $($checkProcs -join ', ')" -ForegroundColor Cyan
-        Write-Host "  Service URL: http://localhost:8000" -ForegroundColor Cyan
-        Write-Host "  API Docs: http://localhost:8000/docs" -ForegroundColor Cyan
-        Write-Host "  Homepage: http://localhost:8000/" -ForegroundColor Cyan
+        Write-Host "  Service URL: http://localhost:$PORT" -ForegroundColor Cyan
+        Write-Host "  API Docs: http://localhost:$PORT/docs" -ForegroundColor Cyan
+        Write-Host "  Homepage: http://localhost:$PORT/" -ForegroundColor Cyan
         Write-Host ""
         
         # Try to check service health
         try {
-            $response = Invoke-RestMethod -Uri "http://localhost:8000/api/health" -TimeoutSec 2 -ErrorAction SilentlyContinue
+            $response = Invoke-RestMethod -Uri "http://localhost:$PORT/health" -TimeoutSec 2 -ErrorAction SilentlyContinue
             Write-Host "[OK] Service health check: OK" -ForegroundColor Green
         } catch {
             Write-Host "[WARN] Service health check: Not responding (may still be starting)" -ForegroundColor Yellow

@@ -148,7 +148,7 @@ try {
         }
     } else {
         Write-Host ""
-        Write-Host "[WARN] Service process started but port 8000 is not listening yet" -ForegroundColor Yellow
+        Write-Host "[WARN] Service process started but port $PORT is not listening yet" -ForegroundColor Yellow
         Write-Host "   Please wait a moment, or check the log file logs\app.log" -ForegroundColor Yellow
     }
 } catch {

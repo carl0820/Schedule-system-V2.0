@@ -10,11 +10,22 @@ Write-Host "  Stop Robot Scheduling Service" -ForegroundColor Cyan
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host ""
 
-# Find processes running on port 8000
-$procs = Get-NetTCPConnection -LocalPort 8000 -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique
+# Get port from config (default 8092)
+$PORT = 8092
+try {
+    $configContent = Get-Content "config.py" -ErrorAction SilentlyContinue | Select-String -Pattern "PORT.*=.*(\d+)"
+    if ($configContent) {
+        $PORT = [int]($configContent.Matches.Groups[1].Value)
+    }
+} catch {
+    # Use default
+}
+
+# Find processes running on port
+$procs = Get-NetTCPConnection -LocalPort $PORT -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique
 
 if (-not $procs) {
-    Write-Host "[OK] Service is not running (port 8000 is not in use)" -ForegroundColor Green
+    Write-Host "[OK] Service is not running (port $PORT is not in use)" -ForegroundColor Green
     exit 0
 }
 
@@ -66,11 +77,11 @@ foreach ($procId in $procs) {
 Start-Sleep -Seconds 2
 
 # Verify if stopped
-$remainingProcs = Get-NetTCPConnection -LocalPort 8000 -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique
+$remainingProcs = Get-NetTCPConnection -LocalPort $PORT -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique
 
 if ($remainingProcs) {
     Write-Host ""
-    Write-Host "[WARN] There are still processes using port 8000 (Process ID: $($remainingProcs -join ', '))" -ForegroundColor Yellow
+    Write-Host "[WARN] There are still processes using port $PORT (Process ID: $($remainingProcs -join ', '))" -ForegroundColor Yellow
     Write-Host "   You may need to stop these processes manually" -ForegroundColor Yellow
     
     if (-not $Force) {
