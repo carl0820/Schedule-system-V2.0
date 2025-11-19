@@ -7,6 +7,7 @@ requests>=2.31.0  # Fallback for VPN environments where httpx fails
 pydantic>=2.5.0
 pydantic-settings>=2.1.0
 python-multipart>=0.0.6
+email_validator>=2.0.0  # Required by pydantic for email validation
 
 # 可选依赖
 redis>=5.0.1

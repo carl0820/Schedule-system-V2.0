@@ -176,48 +176,82 @@ async def health():
 
 @app.on_event("startup")
 async def startup_event():
-    """应用启动事件：加载已注册的机器人，并启动后台任务"""
+    """应用启动事件：加载已注册的机器人，并启动后台任务
+    
+    注意：此事件必须快速完成，不能阻塞uvicorn启动。
+    所有可能阻塞的操作（如网络连接、文件IO等）都放在后台任务中执行。
+    """
     import asyncio
-    logger.info("Application startup: Loading registered robots...")
-    try:
-        robot_manager = get_robot_manager()
-        
-        # 将机器人加载改为后台任务，不阻塞服务启动
-        # 这样即使机器人连接超时，服务也能快速启动并监听端口
-        async def load_robots_background():
-            try:
-                await robot_manager.load_pending_robots()
-                logger.info("Application startup: Finished loading registered robots")
-            except Exception as e:
-                logger.error(f"Failed to load robots in background: {e}", exc_info=True)
-        
-        # 在后台异步加载机器人，不等待完成
-        asyncio.create_task(load_robots_background())
-        logger.info("Application startup: Robot loading started in background (non-blocking)")
-        
-        # 启动任务调度器的后台任务（如果有执行中的任务）
-        # 也改为后台任务，不阻塞服务启动
-        async def start_task_scheduler_background():
-            try:
-                from app.services.task_scheduler import get_task_scheduler
-                task_scheduler = get_task_scheduler()
-                # 在异步上下文中启动后台任务
-                await task_scheduler._start_background_tasks_if_needed_async()
-            except Exception as e:
-                logger.error(f"Failed to start task scheduler background tasks: {e}", exc_info=True)
-        
-        # 在后台异步启动任务调度器，不等待完成
-        asyncio.create_task(start_task_scheduler_background())
-        logger.info("Application startup: Task scheduler background tasks started in background (non-blocking)")
-    except Exception as e:
-        logger.error(f"Failed to start background tasks on startup: {e}", exc_info=True)
+    logger.info("Application startup: Starting initialization (non-blocking)...")
+    
+    # 立即启动后台初始化任务，不等待完成
+    # 这样即使初始化失败，服务也能正常启动并监听端口
+    async def initialize_background():
+        try:
+            logger.info("Application startup: Loading registered robots...")
+            robot_manager = get_robot_manager()
+            
+            # 将机器人加载改为后台任务，不阻塞服务启动
+            # 这样即使机器人连接超时，服务也能快速启动并监听端口
+            async def load_robots_background():
+                try:
+                    await robot_manager.load_pending_robots()
+                    logger.info("Application startup: Finished loading registered robots")
+                except Exception as e:
+                    logger.error(f"Failed to load robots in background: {e}", exc_info=True)
+            
+            # 在后台异步加载机器人，不等待完成
+            asyncio.create_task(load_robots_background())
+            logger.info("Application startup: Robot loading started in background (non-blocking)")
+            
+            # 启动任务调度器的后台任务（如果有执行中的任务）
+            # 也改为后台任务，不阻塞服务启动
+            async def start_task_scheduler_background():
+                try:
+                    from app.services.task_scheduler import get_task_scheduler
+                    task_scheduler = get_task_scheduler()
+                    # 在异步上下文中启动后台任务
+                    await task_scheduler._start_background_tasks_if_needed_async()
+                except Exception as e:
+                    logger.error(f"Failed to start task scheduler background tasks: {e}", exc_info=True)
+            
+            # 在后台异步启动任务调度器，不等待完成
+            asyncio.create_task(start_task_scheduler_background())
+            logger.info("Application startup: Task scheduler background tasks started in background (non-blocking)")
+        except Exception as e:
+            logger.error(f"Failed to start background tasks on startup: {e}", exc_info=True)
+    
+    # 在后台执行初始化，不阻塞启动事件
+    # 使用create_task立即返回，不等待完成
+    asyncio.create_task(initialize_background())
+    logger.info("Application startup: Initialization started in background (non-blocking)")
+    # 启动事件立即返回，确保uvicorn能够正常启动
 
 
 if __name__ == "__main__":
-    uvicorn.run(
-        "main:app",
-        host=settings.HOST,
-        port=settings.PORT,
-        reload=settings.DEBUG
-    )
+    import sys
+    logger.info(f"Starting uvicorn server on {settings.HOST}:{settings.PORT}")
+    logger.info(f"Python version: {sys.version}")
+    logger.info(f"Working directory: {os.getcwd()}")
+    print(f"[INFO] Starting uvicorn server on {settings.HOST}:{settings.PORT}", flush=True)
+    try:
+        # 确保uvicorn能够正常启动，即使启动事件中有问题
+        uvicorn.run(
+            "main:app",
+            host=settings.HOST,
+            port=settings.PORT,
+            reload=settings.DEBUG,
+            log_level="info",
+            access_log=True
+        )
+    except KeyboardInterrupt:
+        logger.info("Server stopped by user")
+        print("[INFO] Server stopped by user", flush=True)
+        raise
+    except Exception as e:
+        logger.error(f"Failed to start uvicorn server: {e}", exc_info=True)
+        import traceback
+        print(f"[ERROR] Failed to start uvicorn server: {e}", flush=True)
+        traceback.print_exc()
+        sys.exit(1)
 
