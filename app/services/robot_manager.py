@@ -80,15 +80,35 @@ class RobotManager:
             
             if test_urls:
                 logger.info(f"Auto-detecting network environment using {len(test_urls)} robot(s)...")
-                network_type, latency = await network_detector.detect_network_environment(test_urls)
-                logger.info(
-                    f"Network environment auto-detected: {network_type.value}, "
-                    f"average latency: {latency:.2f}ms"
-                )
+                # 为网络检测添加超时保护（最多等待6秒），避免在网络环境变化时无限等待
+                try:
+                    network_type, latency = await asyncio.wait_for(
+                        network_detector.detect_network_environment(test_urls),
+                        timeout=6.0
+                    )
+                    logger.info(
+                        f"Network environment auto-detected: {network_type.value}, "
+                        f"average latency: {latency:.2f}ms"
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning("Network detection timeout (6s), using default network type (DIRECT)")
+                    # 设置默认网络类型
+                    from app.services.network_detector import NetworkType
+                    network_detector.set_network_type(NetworkType.DIRECT)
             else:
                 logger.info("No robots registered yet, using default network type (DIRECT)")
+                # 设置默认网络类型
+                from app.services.network_detector import NetworkType
+                network_detector.set_network_type(NetworkType.DIRECT)
         except Exception as e:
             logger.warning(f"Failed to detect network environment: {e}, using default (DIRECT)")
+            # 确保即使出错也设置默认网络类型
+            try:
+                network_detector = get_network_detector()
+                from app.services.network_detector import NetworkType
+                network_detector.set_network_type(NetworkType.DIRECT)
+            except:
+                pass
     
     async def _create_offline_state(self, robot_id: str):
         """创建离线状态"""
@@ -696,8 +716,15 @@ class RobotManager:
             except Exception as e:
                 logger.error(f"Error loading robot {robot_id} from storage file: {e}", exc_info=True)
         
-        # 并发加载所有机器人
-        await asyncio.gather(*[load_single_robot(robot_info) for robot_info in self._pending_robots], return_exceptions=True)
+        # 并发加载所有机器人，并设置全局超时（最多等待3秒）
+        # 即使所有机器人连接失败，也要确保服务能正常启动
+        try:
+            await asyncio.wait_for(
+                asyncio.gather(*[load_single_robot(robot_info) for robot_info in self._pending_robots], return_exceptions=True),
+                timeout=3.0  # 最多等待3秒，即使有5个机器人，每个0.5秒超时，3秒也足够了
+            )
+        except asyncio.TimeoutError:
+            logger.warning(f"Robot loading timeout after 3 seconds. Some robots may not be loaded yet. They will be retried in background.")
         
         # 清空待加载列表
         self._pending_robots = []
@@ -760,9 +787,10 @@ class RobotManager:
             # 获取网络检测器的超时配置（在try块外定义，确保except块可以访问）
             network_detector = get_network_detector()
             timeouts = network_detector.get_timeouts()
-            # 启动时连接测试使用更短的超时（1秒），避免阻塞服务启动
+            # 启动时连接测试使用更短的超时（0.5秒），避免阻塞服务启动
             # 即使连接失败也会注册机器人，后台任务会继续尝试连接
-            test_timeout = min(timeouts["health"], 1.0)
+            # 在网络环境变化时（如切换办公室），快速失败比长时间等待更好
+            test_timeout = min(timeouts["health"], 0.5)
             
             try:
                 # 使用health API（最轻量级）来测试连接，而不是pose API

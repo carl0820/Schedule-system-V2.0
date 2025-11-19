@@ -89,15 +89,37 @@ class NetworkDetector:
             return self.network_type, self.avg_latency
         
         # 测试多个URL，取平均延迟
+        # 为整个检测过程添加超时保护（最多等待5秒），避免在网络环境变化时无限等待
         latencies = []
-        for url in test_urls:
-            try:
-                latency = await self._measure_latency(url)
-                if latency:
-                    latencies.append(latency)
-            except Exception as e:
-                logger.debug(f"Failed to measure latency for {url}: {e}")
-                continue
+        try:
+            # 使用 asyncio.wait_for 为整个检测过程添加超时保护
+            async def measure_all_latencies():
+                for url in test_urls:
+                    try:
+                        latency = await self._measure_latency(url)
+                        if latency:
+                            latencies.append(latency)
+                    except Exception as e:
+                        logger.debug(f"Failed to measure latency for {url}: {e}")
+                        continue
+                    # 如果已经有一个成功的测量，可以提前返回（可选）
+                    if latencies:
+                        break
+            
+            # 最多等待5秒，即使有多个URL要测试
+            await asyncio.wait_for(measure_all_latencies(), timeout=5.0)
+        except asyncio.TimeoutError:
+            logger.warning("Network detection timeout (5s), using default network type (DIRECT)")
+            self.network_type = NetworkType.DIRECT
+            self.avg_latency = 20.0
+            self.last_detection_time = current_time
+            return self.network_type, self.avg_latency
+        except Exception as e:
+            logger.warning(f"Network detection failed: {e}, using default network type (DIRECT)")
+            self.network_type = NetworkType.DIRECT
+            self.avg_latency = 20.0
+            self.last_detection_time = current_time
+            return self.network_type, self.avg_latency
         
         if not latencies:
             logger.warning("Failed to measure latency for all URLs, using default network type (DIRECT)")

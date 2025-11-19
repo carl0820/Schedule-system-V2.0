@@ -196,10 +196,19 @@ async def startup_event():
         logger.info("Application startup: Robot loading started in background (non-blocking)")
         
         # 启动任务调度器的后台任务（如果有执行中的任务）
-        from app.services.task_scheduler import get_task_scheduler
-        task_scheduler = get_task_scheduler()
-        # 在异步上下文中启动后台任务
-        await task_scheduler._start_background_tasks_if_needed_async()
+        # 也改为后台任务，不阻塞服务启动
+        async def start_task_scheduler_background():
+            try:
+                from app.services.task_scheduler import get_task_scheduler
+                task_scheduler = get_task_scheduler()
+                # 在异步上下文中启动后台任务
+                await task_scheduler._start_background_tasks_if_needed_async()
+            except Exception as e:
+                logger.error(f"Failed to start task scheduler background tasks: {e}", exc_info=True)
+        
+        # 在后台异步启动任务调度器，不等待完成
+        asyncio.create_task(start_task_scheduler_background())
+        logger.info("Application startup: Task scheduler background tasks started in background (non-blocking)")
     except Exception as e:
         logger.error(f"Failed to start background tasks on startup: {e}", exc_info=True)
 
