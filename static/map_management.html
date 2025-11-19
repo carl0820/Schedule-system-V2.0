@@ -387,21 +387,43 @@
         // 加载机器人列表
         async function loadRobots() {
             try {
+                console.log('Loading robots...');
                 const response = await fetch('/api/robots/');
-                if (response.ok) {
-                    robots = await response.json();
-                    const select = document.getElementById('robotSelect');
-                    select.innerHTML = '<option value="">请选择机器人...</option>';
+                console.log('Response status:', response.status, response.statusText);
+                
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    console.error('API error:', response.status, errorText);
+                    showAlert(`加载机器人列表失败: ${response.status} ${response.statusText}`, 'error');
+                    return;
+                }
+                
+                robots = await response.json();
+                console.log('Loaded robots:', robots);
+                
+                const select = document.getElementById('robotSelect');
+                if (!select) {
+                    console.error('robotSelect element not found');
+                    return;
+                }
+                
+                select.innerHTML = '<option value="">请选择机器人...</option>';
+                
+                if (robots && robots.length > 0) {
                     robots.forEach(robot => {
                         const option = document.createElement('option');
                         option.value = robot.robot_id;
                         option.textContent = `${robot.robot_id} (${robot.base_url})`;
                         select.appendChild(option);
                     });
+                    console.log(`Added ${robots.length} robots to select`);
+                } else {
+                    console.warn('No robots found');
+                    showAlert('未发现已注册的机器人，请先在机器人管理页面注册机器人', 'warning');
                 }
             } catch (error) {
                 console.error('Failed to load robots:', error);
-                showAlert('加载机器人列表失败', 'error');
+                showAlert(`加载机器人列表失败: ${error.message}`, 'error');
             }
         }
         
