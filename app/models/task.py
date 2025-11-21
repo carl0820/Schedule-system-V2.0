@@ -1,7 +1,7 @@
 """
 任务相关数据模型
 """
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional, List
 from datetime import datetime
 from enum import Enum
@@ -27,13 +27,38 @@ class TaskPriority(int, Enum):
 
 
 class TaskCreate(BaseModel):
-    """创建任务请求"""
-    start_pose: Optional[Pose] = None  # 起点（可选，默认使用机器人当前位置）
+    """创建任务请求
+    
+    注意：start_pose字段已废弃，系统会根据机器人当前位置自动分配任务，无需配置起始点。
+    """
+    # start_pose字段保留在模型中以保持向后兼容，但在Swagger UI中隐藏
+    start_pose: Optional[Pose] = None
     target_pose: Pose  # 终点
     priority: Optional[TaskPriority] = None  # 优先级（可选，如果不指定则自动计算）
     poi_name: Optional[str] = None  # 如果使用POI导航
     acceptable_precision: float = 0.3  # 到达精度（米）
     speed_ratio: float = 1.0  # 速度比例
+    
+    class Config:
+        # 从OpenAPI schema中排除start_pose字段
+        fields = {
+            'start_pose': {'exclude': True}
+        }
+        json_schema_extra = {
+            "example": {
+                "target_pose": {
+                    "x": -16.58,
+                    "y": 11.46,
+                    "z": 0.0,
+                    "yaw": 0.0,
+                    "pitch": 0.0,
+                    "roll": 0.0
+                },
+                "priority": 2,
+                "acceptable_precision": 0.3,
+                "speed_ratio": 1.0
+            }
+        }
 
 
 class ActionType(str, Enum):
@@ -55,17 +80,25 @@ class ActionItem(BaseModel):
 
 
 class MultiActionTaskCreate(BaseModel):
-    """创建多动作任务请求"""
+    """创建多动作任务请求
+    
+    注意：start_pose字段已废弃，系统会根据机器人当前位置自动分配任务，无需配置起始点。
+    """
     actions: List[ActionItem]  # 动作序列
     priority: Optional[TaskPriority] = None  # 优先级（可选，如果不指定则自动计算）
-    start_pose: Optional[Pose] = None  # 起点（可选，默认使用机器人当前位置）
+    # start_pose字段保留在模型中以保持向后兼容，但在Swagger UI中隐藏
+    start_pose: Optional[Pose] = None
     
     class Config:
+        # 从OpenAPI schema中排除start_pose字段
+        fields = {
+            'start_pose': {'exclude': True}
+        }
         json_schema_extra = {
             "examples": [
                 {
                     "summary": "移动到坐标并等待10秒（推荐）",
-                    "description": "使用坐标导航，移动到指定位置后等待10秒。这是最简单可靠的方式。",
+                    "description": "使用坐标导航，移动到指定位置后等待10秒。这是最简单可靠的方式。注意：不需要配置start_pose。",
                     "value": {
                         "actions": [
                             {
@@ -91,7 +124,7 @@ class MultiActionTaskCreate(BaseModel):
                 },
                 {
                     "summary": "移动到POI并等待",
-                    "description": "使用POI名称导航（需要先查询POI列表：GET /api/maps/pois）。如果POI不存在会失败。",
+                    "description": "使用POI名称导航（需要先查询POI列表：GET /api/maps/pois）。如果POI不存在会失败。注意：不需要配置start_pose。",
                     "value": {
                         "actions": [
                             {
@@ -110,7 +143,7 @@ class MultiActionTaskCreate(BaseModel):
                 },
                 {
                     "summary": "完整多动作任务：移动到POI -> 等待 -> 移动到另一个POI -> 回桩",
-                    "description": "包含多个动作的完整任务示例：移动到POI、等待、移动到另一个POI、最后回桩。",
+                    "description": "包含多个动作的完整任务示例：移动到POI、等待、移动到另一个POI、最后回桩。注意：不需要配置start_pose。",
                     "value": {
                         "actions": [
                             {

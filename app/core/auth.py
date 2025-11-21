@@ -7,7 +7,9 @@ from typing import Optional
 from app.services.user_service import get_user_service, UserService
 from app.models.user import User, UserRole
 
-security = HTTPBearer()
+# 配置HTTPBearer，允许可选认证（用于某些不需要认证的端点）
+# 但对于需要认证的端点，仍然会要求提供token
+security = HTTPBearer(auto_error=True)
 
 
 async def get_current_user(

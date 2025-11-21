@@ -4,6 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>任务详情 - 多机器人调度系统</title>
+    <!-- 认证检查：确保用户已登录 -->
+    <script src="/static/auth_check.js"></script>
     <style>
         * {
             margin: 0;
@@ -324,7 +326,7 @@
         const API_BASE = window.location.origin;
         
         // 检查登录状态
-        const token = localStorage.getItem('access_token');
+        let token = localStorage.getItem('access_token');
         if (!token) {
             window.location.href = '/static/login.html';
         }
@@ -336,10 +338,18 @@
             const urlString = typeof url === 'string' ? url : url.toString();
             // 检查 URL 是否包含 /api/ 路径（支持相对路径和绝对路径）
             if (urlString.includes('/api/')) {
+                // 每次都从localStorage获取最新的token
+                const currentToken = localStorage.getItem('access_token');
+                if (!currentToken) {
+                    console.error('Token not found, redirecting to login');
+                    window.location.href = '/static/login.html';
+                    return Promise.reject(new Error('No token available'));
+                }
                 options.headers = {
                     ...options.headers,
-                    'Authorization': `Bearer ${token}`
+                    'Authorization': `Bearer ${currentToken}`
                 };
+                console.log('Fetch request:', urlString, 'with token:', currentToken ? currentToken.substring(0, 20) + '...' : 'none');
             }
             return originalFetch.apply(this, args);
         };
@@ -374,9 +384,60 @@
             const content = document.getElementById('taskDetailContent');
             
             try {
-                const response = await fetch(`${API_BASE}/api/tasks/${taskId}`);
+                // 确保使用最新的token
+                const currentToken = localStorage.getItem('access_token');
+                if (!currentToken) {
+                    showAlert('登录已过期，请重新登录', 'error');
+                    setTimeout(() => {
+                        window.location.href = '/static/login.html';
+                    }, 2000);
+                    return;
+                }
+                
+                const response = await fetch(`${API_BASE}/api/tasks/${taskId}`, {
+                    method: 'GET',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${currentToken}`
+                    }
+                });
+                
+                console.log('Task detail response status:', response.status, response.statusText);
+                
+                if (response.status === 401) {
+                    console.error('Unauthorized - token may be expired');
+                    content.innerHTML = `
+                        <div class="error">
+                            登录已过期，请重新登录
+                        </div>
+                        <div style="margin-top: 1rem;">
+                            <a href="/static/login.html" class="btn btn-secondary">前往登录</a>
+                        </div>
+                    `;
+                    setTimeout(() => {
+                        localStorage.removeItem('access_token');
+                        window.location.href = '/static/login.html';
+                    }, 2000);
+                    return;
+                }
+                
+                if (response.status === 403) {
+                    const errorText = await response.text();
+                    console.error('Forbidden error:', errorText);
+                    content.innerHTML = `
+                        <div class="error">
+                            权限不足: ${errorText}
+                        </div>
+                        <div style="margin-top: 1rem;">
+                            <a href="task_list.html" class="btn btn-secondary">返回列表</a>
+                        </div>
+                    `;
+                    return;
+                }
+                
                 if (!response.ok) {
-                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                    const errorText = await response.text();
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}\n${errorText}`);
                 }
                 
                 const task = await response.json();

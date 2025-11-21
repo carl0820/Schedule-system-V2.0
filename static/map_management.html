@@ -4,6 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>地图管理 - 多机器人调度系统</title>
+    <!-- 认证检查：确保用户已登录 -->
+    <script src="/static/auth_check.js"></script>
     <style>
         * {
             margin: 0;
@@ -361,7 +363,7 @@
     
     <script>
         // 检查登录状态
-        const token = localStorage.getItem('access_token');
+        let token = localStorage.getItem('access_token');
         if (!token) {
             window.location.href = '/static/login.html';
         }
@@ -373,10 +375,18 @@
             const urlString = typeof url === 'string' ? url : url.toString();
             // 检查 URL 是否包含 /api/ 路径（支持相对路径和绝对路径）
             if (urlString.includes('/api/')) {
+                // 每次都从localStorage获取最新的token
+                const currentToken = localStorage.getItem('access_token');
+                if (!currentToken) {
+                    console.error('Token not found, redirecting to login');
+                    window.location.href = '/static/login.html';
+                    return Promise.reject(new Error('No token available'));
+                }
                 options.headers = {
                     ...options.headers,
-                    'Authorization': `Bearer ${token}`
+                    'Authorization': `Bearer ${currentToken}`
                 };
+                console.log('Fetch request:', urlString, 'with token:', currentToken ? currentToken.substring(0, 20) + '...' : 'none');
             }
             return originalFetch.apply(this, args);
         };
@@ -388,13 +398,32 @@
         async function loadRobots() {
             try {
                 console.log('Loading robots...');
-                const response = await fetch('/api/robots/');
+                console.log('Current token:', token ? token.substring(0, 20) + '...' : 'none');
+                
+                const response = await fetch('/api/robots/', {
+                    method: 'GET',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    }
+                });
+                
                 console.log('Response status:', response.status, response.statusText);
+                console.log('Response headers:', Object.fromEntries(response.headers.entries()));
+                
+                if (response.status === 401) {
+                    console.error('Unauthorized - token may be expired');
+                    showAlert('登录已过期，请重新登录', 'error');
+                    setTimeout(() => {
+                        localStorage.removeItem('access_token');
+                        window.location.href = '/static/login.html';
+                    }, 2000);
+                    return;
+                }
                 
                 if (!response.ok) {
                     const errorText = await response.text();
                     console.error('API error:', response.status, errorText);
-                    showAlert(`加载机器人列表失败: ${response.status} ${response.statusText}`, 'error');
+                    showAlert(`加载机器人列表失败: ${response.status} ${response.statusText}\n${errorText}`, 'error');
                     return;
                 }
                 
@@ -404,6 +433,7 @@
                 const select = document.getElementById('robotSelect');
                 if (!select) {
                     console.error('robotSelect element not found');
+                    showAlert('页面元素未找到，请刷新页面重试', 'error');
                     return;
                 }
                 
@@ -417,12 +447,14 @@
                         select.appendChild(option);
                     });
                     console.log(`Added ${robots.length} robots to select`);
+                    showAlert(`成功加载 ${robots.length} 个机器人`, 'success');
                 } else {
                     console.warn('No robots found');
                     showAlert('未发现已注册的机器人，请先在机器人管理页面注册机器人', 'warning');
                 }
             } catch (error) {
                 console.error('Failed to load robots:', error);
+                console.error('Error stack:', error.stack);
                 showAlert(`加载机器人列表失败: ${error.message}`, 'error');
             }
         }

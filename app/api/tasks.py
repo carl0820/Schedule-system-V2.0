@@ -30,8 +30,13 @@ async def create_task(
     返回完整的任务信息，包括 task_id、status、created_at 等。
     使用返回的 task_id 可以查询任务状态：GET /api/tasks/{task_id}
     
+    **重要说明：**
+    - 不需要配置 `start_pose`（已废弃），系统会根据机器人当前位置自动分配任务
+    - 只需指定 `target_pose`（目标位置）即可
+    - 系统会自动选择距离目标最近的机器人执行任务
+    
     Args:
-        task: 任务创建请求
+        task: 任务创建请求（只需指定target_pose，无需start_pose）
     
     Returns:
         Task: 创建的任务对象，包含 task_id、status、created_at 等字段
@@ -91,16 +96,24 @@ async def get_task(
     """
     获取任务信息
     
+    所有已认证的用户都可以查看任务详情，无需特殊权限。
+    
     Args:
         task_id: 任务ID
     """
     try:
+        # 记录访问日志（用于调试）
+        logger.debug(f"User {current_user.user_id} (role: {current_user.role}) requesting task {task_id}")
+        
         task = await task_scheduler.get_task(task_id)
         if task:
             return task
         else:
             raise HTTPException(status_code=404, detail="Task not found")
+    except HTTPException:
+        raise
     except Exception as e:
+        logger.error(f"Error getting task {task_id} for user {current_user.user_id}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -398,6 +411,11 @@ async def create_multi_action_task(
     返回完整的任务信息，包括 task_id、status、created_at 等。
     使用返回的 task_id 可以查询任务状态：GET /api/tasks/{task_id}
     
+    **重要说明：**
+    - 不需要配置 `start_pose`（已废弃），系统会根据机器人当前位置自动分配任务
+    - 只需指定 `actions`（动作序列）即可
+    - 系统会自动选择距离目标最近的机器人执行任务
+    
     **支持的动作类型：**
     - **move_to**: 移动到目标点
       - 方式1（推荐）：使用 `target_pose` 指定坐标，简单可靠
@@ -415,7 +433,7 @@ async def create_multi_action_task(
     查看下方 "Examples" 下拉菜单，选择不同的示例进行测试。
     
     Args:
-        task: 多动作任务创建请求
+        task: 多动作任务创建请求（只需指定actions，无需start_pose）
     
     Returns:
         Task: 创建的任务对象，包含 task_id、status、created_at 等字段

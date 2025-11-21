@@ -147,9 +147,15 @@
     <script>
         const API_BASE = window.location.origin;
         
-        // 如果已登录，跳转到首页
+        // 如果已登录，检查是否有重定向URL，否则跳转到首页
         if (localStorage.getItem('access_token')) {
-            window.location.href = '/static/index.html';
+            const redirectUrl = sessionStorage.getItem('redirect_after_login');
+            if (redirectUrl && !redirectUrl.includes('login.html')) {
+                sessionStorage.removeItem('redirect_after_login');
+                window.location.href = redirectUrl;
+            } else {
+                window.location.href = '/static/index.html';
+            }
         }
         
         document.getElementById('loginForm').addEventListener('submit', async (e) => {
@@ -181,8 +187,18 @@
                     // 存储token和用户信息
                     localStorage.setItem('access_token', data.access_token);
                     localStorage.setItem('user', JSON.stringify(data.user));
-                    // 跳转到首页
-                    window.location.href = '/static/index.html';
+                    
+                    // 检查是否有保存的重定向URL
+                    const redirectUrl = sessionStorage.getItem('redirect_after_login');
+                    if (redirectUrl && !redirectUrl.includes('login.html')) {
+                        // 清除保存的重定向URL
+                        sessionStorage.removeItem('redirect_after_login');
+                        // 跳转到之前访问的页面
+                        window.location.href = redirectUrl;
+                    } else {
+                        // 跳转到首页
+                        window.location.href = '/static/index.html';
+                    }
                 } else {
                     const error = await response.json();
                     errorDiv.textContent = error.detail || '登录失败，请检查用户名和密码';

@@ -272,35 +272,16 @@ class TaskScheduler:
         start_time = time.time()
         task_creation_time = time.time()  # 记录任务创建时间，用于计算分配耗时
         # 自动计算优先级（如果用户没有指定）
-        # 优化：简化优先级计算，避免在创建任务时查询所有机器人（这会阻塞任务创建）
+        # 优化：简化优先级计算，不再依赖起始点（系统不再需要起始点）
         if task_create.priority is None:
-            # 使用简化的优先级计算（基于目标位置，不查询机器人状态）
-            # 优先级计算可以在任务分配时进行更精确的计算
-            start_pose_for_calc = task_create.start_pose
-            if start_pose_for_calc is None:
-                # 如果没有起点，使用默认起点（0,0）进行粗略估算
-                start_pose_for_calc = Pose(x=0.0, y=0.0, yaw=0.0)
-            
-            # 使用简化的优先级计算（不进行路径规划，只基于直线距离）
-            dx = task_create.target_pose.x - start_pose_for_calc.x
-            dy = task_create.target_pose.y - start_pose_for_calc.y
-            distance = math.sqrt(dx*dx + dy*dy)
-            
-            # 根据距离估算优先级（距离越远，优先级越高，因为需要更多时间）
-            if distance > 10.0:
-                calculated_priority = TaskPriority.HIGH
-            elif distance > 5.0:
-                calculated_priority = TaskPriority.NORMAL
-            else:
-                calculated_priority = TaskPriority.LOW
+            # 使用默认优先级（NORMAL），任务分配时会根据机器人位置计算最优分配
+            priority = TaskPriority.NORMAL
             
             # 如果有POI信息，适当提高优先级
             if task_create.poi_name:
-                if calculated_priority.value < TaskPriority.HIGH.value:
-                    calculated_priority = TaskPriority.HIGH
+                priority = TaskPriority.HIGH
             
-            priority = calculated_priority
-            logger.info(f"Auto-calculated priority for new task (simplified): {priority.value} ({priority.name}), distance={distance:.2f}m")
+            logger.info(f"Auto-calculated priority for new task: {priority.value} ({priority.name})")
         else:
             # 用户指定了优先级，使用用户指定的
             priority = task_create.priority
@@ -309,12 +290,12 @@ class TaskScheduler:
         # 生成任务ID
         task_id = str(uuid.uuid4())
         
-        # 创建任务对象
+        # 创建任务对象（不再使用start_pose，系统会根据机器人当前位置分配任务）
         task = Task(
             task_id=task_id,
             robot_id=None,
             status=TaskStatus.PENDING,
-            start_pose=task_create.start_pose,
+            start_pose=None,  # 不再使用起始点，系统会根据机器人当前位置分配
             target_pose=task_create.target_pose,
             priority=priority,
             action_id=None,
@@ -483,16 +464,16 @@ class TaskScheduler:
                     target_pose = Pose(x=0.0, y=0.0, yaw=0.0)
                     break
         
-        # 如果没有移动动作，使用起点作为目标位置（用于兼容）
+        # 如果没有移动动作，使用默认目标位置（用于兼容）
         if target_pose is None:
-            target_pose = task_create.start_pose or Pose(x=0.0, y=0.0, yaw=0.0)
+            target_pose = Pose(x=0.0, y=0.0, yaw=0.0)
         
-        # 创建任务对象（快速创建）
+        # 创建任务对象（快速创建，不再使用start_pose）
         task = Task(
             task_id=task_id,
             robot_id=None,
             status=TaskStatus.PENDING,
-            start_pose=task_create.start_pose,
+            start_pose=None,  # 不再使用起始点，系统会根据机器人当前位置分配
             target_pose=target_pose,
             priority=priority,
             action_id=None,
@@ -1065,50 +1046,16 @@ class TaskScheduler:
                                 logger.warning(f"Task {task.task_id} has invalid target_pose (0,0), using high cost for robot {robot_id}")
                                 return (robot_id, float('inf'))
                             
-                            # 优化：对于简单任务，先使用直线距离快速筛选，只对最优候选进行路径规划
-                            # 计算直线距离作为初步成本估算
+                            # 优化：移除系统路径规划，只使用直线距离计算成本
+                            # 机器人会使用自己的导航系统进行路径规划，系统只需要选择最近的机器人
                             dx = target_pose.x - robot_pose.x
                             dy = target_pose.y - robot_pose.y
-                            straight_distance = math.sqrt(dx*dx + dy*dy)
+                            cost = math.sqrt(dx*dx + dy*dy)
                             
-                            # 使用asyncio.to_thread在后台线程中执行路径规划（避免阻塞）
-                            # 添加超时，避免路径规划阻塞太久
-                            path = None
-                            try:
-                                path = await asyncio.wait_for(
-                                    asyncio.to_thread(self.path_planner.plan_path, robot_pose, target_pose),
-                                    timeout=2.0  # 减少超时时间到2秒，更快响应
-                                )
-                            except asyncio.TimeoutError:
-                                logger.debug(f"Path planning timeout for robot {robot_id}, using straight-line distance")
-                                path = None
-                            except Exception as e:
-                                logger.debug(f"Path planning error for robot {robot_id}: {e}, using straight-line distance")
-                                path = None
-                            
-                            if path and len(path) > 1:
-                                # 计算路径总长度
-                                path_length = 0.0
-                                for i in range(len(path) - 1):
-                                    dx = path[i+1].x - path[i].x
-                                    dy = path[i+1].y - path[i].y
-                                    path_length += math.sqrt(dx*dx + dy*dy)
-                                
-                                # 优化：简化碰撞检测，只检查关键点（减少计算时间）
-                                # 对于连续创建的任务，快速分配比精确碰撞检测更重要
-                                collision_penalty = await self._check_path_collision_with_planned_paths(
-                                    robot_id, path, task.task_id
-                                )
-                                
-                                # 成本 = 路径长度 + 碰撞惩罚（碰撞惩罚越大，成本越高）
-                                cost = path_length + collision_penalty
-                            else:
-                                # 如果路径规划失败，使用直线距离作为备选
-                                cost = straight_distance
-                                logger.debug(
-                                    f"Path planning failed for robot {robot_id} to task {task.task_id}, "
-                                    f"using straight-line distance: {cost:.2f}m"
-                                )
+                            logger.debug(
+                                f"Robot {robot_id} cost for task {task.task_id}: "
+                                f"straight-line distance = {cost:.2f}m (robot will use its own path planner)"
+                            )
                             
                             return (robot_id, cost)
                         except Exception as e:
@@ -1244,113 +1191,11 @@ class TaskScheduler:
                 task.completed_at = datetime.now()
                 return
             
-            logger.info(f"Robot agent found for {robot_id}, getting current pose...")
+            logger.info(f"Robot agent found for {robot_id}, assigning task directly (robot will use its own path planner)")
             
-            # 确定起点
-            if task.start_pose:
-                start = task.start_pose
-                logger.info(f"Using task start_pose: ({start.x}, {start.y}, yaw={start.yaw})")
-            else:
-                # 使用机器人当前位置
-                try:
-                    pose = await agent.get_pose()
-                    start = Pose(x=pose.x, y=pose.y, yaw=pose.yaw)
-                    logger.info(f"Using robot current pose: ({start.x}, {start.y}, yaw={start.yaw})")
-                except Exception as e:
-                    error_msg = f"Failed to get robot pose: {e}"
-                    logger.error(error_msg)
-                    task.status = TaskStatus.FAILED
-                    task.error_message = error_msg
-                    task.completed_at = datetime.now()
-                    return
-            
-            # 检查路径是否与其他机器人碰撞
-            logger.info(f"Planning path from ({start.x}, {start.y}) to ({task.target_pose.x}, {task.target_pose.y})")
-            path = self.path_planner.plan_path(start, task.target_pose)
-            if not path:
-                error_msg = (
-                    f"Path planning failed for task {task.task_id}: "
-                    f"cannot find path from ({start.x}, {start.y}) to "
-                    f"({task.target_pose.x}, {task.target_pose.y})"
-                )
-                logger.error(error_msg)
-                # 对于路径规划失败，允许重试（不立即标记为FAILED）
-                # 如果重试次数过多，再标记为FAILED
-                task.retry_count += 1
-                if task.retry_count >= 3:
-                    task.status = TaskStatus.FAILED
-                    task.error_message = error_msg
-                    task.completed_at = datetime.now()
-                else:
-                    logger.warning(f"Path planning failed, will retry later. Retry count: {task.retry_count}")
-                    task.status = TaskStatus.PENDING  # 保持PENDING状态，等待重试
-                return
-            
-            logger.info(
-                f"Path planned for task {task.task_id}: {len(path)} waypoints from "
-                f"({start.x}, {start.y}) to ({task.target_pose.x}, {task.target_pose.y})"
-            )
-            
-            # 存储任务的规划路径，用于后续碰撞检测
-            self.task_paths[task.task_id] = path
-            
-            # 检测路径中的窄道
-            narrow_passages = self.path_planner.detect_narrow_passages(path, robot_radius=0.2, narrow_threshold=1.0)
-            if narrow_passages:
-                logger.info(
-                    f"Task {task.task_id} path contains {len(narrow_passages)} narrow passage(s): "
-                    f"{[(i, f'{w:.2f}m') for i, _, w in narrow_passages]}"
-                )
-                
-                # 检查窄道通行限制：如果路径中有窄道，检查是否有其他机器人也在使用相同的窄道
-                for passage_idx, passage_pose, passage_width in narrow_passages:
-                    # 检查是否可以同时通过多个机器人
-                    can_pass_concurrently = self.path_planner.can_pass_concurrently(
-                        passage_width, robot_radius=0.2, num_robots=2
-                    )
-                    
-                    if not can_pass_concurrently:
-                        # 检查是否有其他机器人正在使用这个窄道
-                        conflicting_robots = await self._check_narrow_passage_conflict(
-                            robot_id, passage_pose, passage_width, task.task_id
-                        )
-                        
-                        if conflicting_robots:
-                            logger.warning(
-                                f"Narrow passage conflict detected for task {task.task_id} at "
-                                f"({passage_pose.x:.2f}, {passage_pose.y:.2f}): "
-                                f"width={passage_width:.2f}m, conflicting robots={conflicting_robots}"
-                            )
-                            # 如果冲突严重，可以考虑延迟任务或重新规划路径
-                            # 这里先记录警告，让避让策略在运行时处理
-            
-            # 检查路径碰撞（考虑其他机器人已规划的路径）
-            other_robots = [r for r in self.robot_manager.list_robots() if r != robot_id]
-            collisions = await self.collision_detector.check_path_collision(
-                robot_id,
-                path,
-                other_robots
-            )
-            
-            # 检查与其他任务已规划路径的碰撞
-            planned_path_collisions = await self._check_path_collision_with_planned_paths(
-                robot_id, path, task.task_id, return_collisions=True
-            )
-            
-            if collisions or planned_path_collisions:
-                collision_count = len(collisions) + len(planned_path_collisions)
-                logger.warning(
-                    f"Path collision detected for task {task.task_id}. "
-                    f"Collisions at waypoints: {[c[0] for c in collisions]}, "
-                    f"planned path collisions: {len(planned_path_collisions)}"
-                )
-                # 如果碰撞严重，尝试重新规划路径
-                if collision_count > len(path) * 0.3:  # 如果碰撞点超过路径的30%
-                    logger.warning(
-                        f"Too many collisions ({collision_count}) for task {task.task_id}, "
-                        f"but continuing execution. Avoidance strategy will handle collisions."
-                    )
-                # 继续执行，让避让策略在运行时处理
+            # 优化：移除系统路径规划，让机器人使用自己的导航系统
+            # 系统只需要分配任务，机器人会自主导航到目标点
+            # 死锁解锁策略会在运行时处理冲突情况
             
             # 在分配前，再次检查机器人是否已经有活跃任务（防止并发分配）
             has_active_task = any(

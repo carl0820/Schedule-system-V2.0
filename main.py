@@ -58,6 +58,54 @@ app = FastAPI(
     description="多机器人调度系统 - 基于思岚科技底盘REST API"
 )
 
+# 定制OpenAPI schema，移除start_pose字段
+def custom_openapi():
+    # 清除缓存，强制重新生成schema
+    if hasattr(app, 'openapi_schema'):
+        del app.openapi_schema
+    from fastapi.openapi.utils import get_openapi
+    openapi_schema = get_openapi(
+        title=app.title,
+        version=app.version,
+        description=app.description,
+        routes=app.routes,
+    )
+    # 从TaskCreate和MultiActionTaskCreate模型中移除start_pose字段
+    if "components" in openapi_schema and "schemas" in openapi_schema["components"]:
+        schemas = openapi_schema["components"]["schemas"]
+        # 移除TaskCreate中的start_pose
+        if "TaskCreate" in schemas and "properties" in schemas["TaskCreate"]:
+            schemas["TaskCreate"]["properties"].pop("start_pose", None)
+            if "required" in schemas["TaskCreate"]:
+                schemas["TaskCreate"]["required"] = [
+                    r for r in schemas["TaskCreate"]["required"] 
+                    if r != "start_pose"
+                ]
+        # 移除MultiActionTaskCreate中的start_pose
+        if "MultiActionTaskCreate" in schemas and "properties" in schemas["MultiActionTaskCreate"]:
+            schemas["MultiActionTaskCreate"]["properties"].pop("start_pose", None)
+            if "required" in schemas["MultiActionTaskCreate"]:
+                schemas["MultiActionTaskCreate"]["required"] = [
+                    r for r in schemas["MultiActionTaskCreate"]["required"] 
+                    if r != "start_pose"
+                ]
+    # 不缓存schema，确保每次请求都重新生成
+    app.openapi_schema = openapi_schema
+    return openapi_schema
+
+app.openapi = custom_openapi
+
+# 添加中间件，防止OpenAPI JSON被浏览器缓存
+@app.middleware("http")
+async def no_cache_openapi(request, call_next):
+    response = await call_next(request)
+    # 如果是OpenAPI相关请求，添加无缓存头
+    if request.url.path in ["/openapi.json", "/docs", "/redoc"]:
+        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+    return response
+
 # CORS中间件
 app.add_middleware(
     CORSMiddleware,
@@ -78,18 +126,9 @@ app.include_router(visualization.router, prefix="/api/visualization", tags=["可
 # HTML页面路由（必须在静态文件挂载之前注册，以确保优先级）
 @app.get("/")
 async def root():
-    """根路径 - 返回HTML页面"""
-    import os
-    html_path = os.path.join(os.path.dirname(__file__), "static", "index.html")
-    if os.path.exists(html_path):
-        return FileResponse(html_path)
-    else:
-        return {
-            "name": settings.APP_NAME,
-            "version": settings.APP_VERSION,
-            "status": "running",
-            "message": "HTML file not found"
-        }
+    """根路径 - 重定向到登录页面（需要认证后才能访问其他页面）"""
+    from fastapi.responses import RedirectResponse
+    return RedirectResponse(url="/static/login.html")
 
 
 @app.get("/task_list.html")
