@@ -4,8 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>任务列表 - 多机器人调度系统</title>
-    <!-- 认证检查：确保用户已登录 -->
-    <script src="/static/auth_check.js"></script>
+    <!-- API无需认证，已移除认证检查 -->
     <style>
         * {
             margin: 0;
@@ -550,26 +549,7 @@
     <script>
         const API_BASE = window.location.origin;
         
-        // 检查登录状态
-        const token = localStorage.getItem('access_token');
-        if (!token) {
-            window.location.href = '/static/login.html';
-        }
-        
-        // 添加认证头到所有fetch请求
-        const originalFetch = window.fetch;
-        window.fetch = function(...args) {
-            const [url, options = {}] = args;
-            const urlString = typeof url === 'string' ? url : url.toString();
-            // 检查 URL 是否包含 /api/ 路径（支持相对路径和绝对路径）
-            if (urlString.includes('/api/')) {
-                options.headers = {
-                    ...options.headers,
-                    'Authorization': `Bearer ${token}`
-                };
-            }
-            return originalFetch.apply(this, args);
-        };
+        // API无需认证，已移除认证检查
         let allTasks = [];
         let allRobots = [];
         let currentStatusFilter = 'all';
@@ -624,14 +604,18 @@
             // 防止频繁刷新（除非强制刷新）
             const now = Date.now();
             if (!force && isRefreshing) {
+                console.log('Already refreshing, skipping...');
                 return; // 如果正在刷新，跳过
             }
             if (!force && now - lastRefreshTime < 500) {
+                console.log('Too soon since last refresh, skipping...');
                 return; // 如果距离上次刷新不到500ms，跳过（防止过于频繁）
             }
             
             isRefreshing = true;
             lastRefreshTime = now;
+            
+            console.log('Starting to fetch tasks...');
             
             try {
                 // 构建查询参数
@@ -652,12 +636,50 @@
                 params.append('page', currentPage.toString());
                 params.append('page_size', pageSize.toString());
                 
-                // 获取任务列表（带分页）
-                const tasksResponse = await fetch(`${API_BASE}/api/tasks/?${params.toString()}`);
-                if (!tasksResponse.ok) {
-                    throw new Error(`HTTP ${tasksResponse.status}: ${tasksResponse.statusText}`);
+                const url = `${API_BASE}/api/tasks/?${params.toString()}`;
+                console.log('Fetching from:', url);
+                
+                // 获取任务列表（带分页，添加超时控制，缩短超时时间到10秒）
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => {
+                    console.error('Request timeout after 10 seconds');
+                    controller.abort();
+                }, 10000); // 10秒超时
+                
+                let data;
+                try {
+                    const tasksResponse = await fetch(url, {
+                        signal: controller.signal
+                    });
+                    clearTimeout(timeoutId);
+                    
+                    console.log('Response status:', tasksResponse.status, tasksResponse.statusText);
+                    
+                    if (!tasksResponse.ok) {
+                        const errorText = await tasksResponse.text();
+                        console.error('Response error:', errorText);
+                        throw new Error(`HTTP ${tasksResponse.status}: ${tasksResponse.statusText}. ${errorText.substring(0, 100)}`);
+                    }
+                    
+                    const responseText = await tasksResponse.text();
+                    console.log('Response received, length:', responseText.length);
+                    
+                    try {
+                        data = JSON.parse(responseText);
+                        console.log('Data parsed successfully, tasks count:', data.tasks ? data.tasks.length : 0);
+                    } catch (parseError) {
+                        console.error('JSON parse error:', parseError);
+                        console.error('Response text:', responseText.substring(0, 500));
+                        throw new Error('响应格式错误，无法解析JSON: ' + parseError.message);
+                    }
+                } catch (fetchError) {
+                    clearTimeout(timeoutId);
+                    console.error('Fetch error:', fetchError);
+                    if (fetchError.name === 'AbortError') {
+                        throw new Error('请求超时（10秒），请稍后重试');
+                    }
+                    throw fetchError;
                 }
-                const data = await tasksResponse.json();
                 
                 // 处理新的响应格式
                 allTasks = data.tasks || [];
@@ -685,22 +707,51 @@
                 }
                 
                 // 显示任务和更新分页（筛选和排序已在后端完成）
-                displayTasks(allTasks);
-                updatePagination();
+                console.log('Calling displayTasks with', allTasks.length, 'tasks');
+                if (typeof displayTasks === 'function') {
+                    displayTasks(allTasks);
+                } else {
+                    console.error('displayTasks function not found');
+                    const taskListEl = document.getElementById('taskList');
+                    if (taskListEl) {
+                        taskListEl.innerHTML = '<div class="loading" style="color: #dc3545;">错误：displayTasks函数未定义</div>';
+                    }
+                }
+                if (typeof updatePagination === 'function') {
+                    updatePagination();
+                } else {
+                    console.error('updatePagination function not found');
+                }
+                console.log('Data refresh completed successfully');
             } catch (error) {
                 console.error('Failed to fetch tasks:', error);
+                console.error('Error stack:', error.stack);
                 const errorMsg = error.message || '未知错误';
-                document.getElementById('taskList').innerHTML = `
-                    <div class="loading" style="color: #dc3545;">
-                        <h3>加载失败</h3>
-                        <p>错误信息: ${errorMsg}</p>
-                        <p>请检查网络连接或刷新页面重试</p>
-                    </div>
-                `;
+                const taskListEl = document.getElementById('taskList');
+                if (taskListEl) {
+                    taskListEl.innerHTML = `
+                        <div class="loading" style="color: #dc3545; padding: 2rem;">
+                            <h3>加载失败</h3>
+                            <p><strong>错误信息:</strong> ${errorMsg}</p>
+                            <p>请检查：</p>
+                            <ul style="text-align: left; margin: 1rem 0;">
+                                <li>网络连接是否正常</li>
+                                <li>服务是否正在运行</li>
+                                <li>浏览器控制台是否有更多错误信息</li>
+                            </ul>
+                            <button onclick="location.reload()" class="btn btn-primary" style="margin-top: 1rem;">刷新页面</button>
+                            <button onclick="refreshData(true)" class="btn btn-secondary" style="margin-top: 0.5rem; margin-left: 0.5rem;">重试</button>
+                        </div>
+                    `;
+                }
                 // 隐藏分页控件
-                document.getElementById('pagination').style.display = 'none';
+                const paginationEl = document.getElementById('pagination');
+                if (paginationEl) {
+                    paginationEl.style.display = 'none';
+                }
             } finally {
                 isRefreshing = false;
+                console.log('Refresh completed, isRefreshing set to false');
             }
         }
         

@@ -9,6 +9,7 @@ from app.models.user import User, UserRole
 
 # 配置HTTPBearer，允许可选认证（用于某些不需要认证的端点）
 # 但对于需要认证的端点，仍然会要求提供token
+# 使用标准HTTPBearer，避免干扰请求体解析
 security = HTTPBearer(auto_error=True)
 
 

@@ -9,8 +9,7 @@ import logging
 from urllib.parse import urlparse
 from app.models.robot import RobotState, RobotStatus, RegisterRequest
 from app.services.robot_manager import RobotManager, get_robot_manager
-from app.core.auth import get_current_user, can_manage_robots
-from app.models.user import User
+# 认证已移除，所有API端点无需授权即可调用
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -62,7 +61,6 @@ def extract_host_from_url(url: str) -> str:
 @router.post("/register", response_model=dict)
 async def register_robot(
     request: RegisterRequest,
-    current_user: User = Depends(get_current_user),
     robot_manager: RobotManager = Depends(get_robot_manager)
 ):
     """
@@ -75,9 +73,6 @@ async def register_robot(
     Args:
         request: 注册请求体，包含robot_id和base_url
     """
-    # 检查权限：只有超级管理员、管理员、运维人员可以注册机器人
-    if not can_manage_robots(current_user):
-        raise HTTPException(status_code=403, detail="Permission denied: Only administrators and operators can register robots")
     
     try:
         robot_id = request.robot_id
@@ -184,7 +179,6 @@ async def register_robot(
 @router.delete("/{robot_id}", response_model=dict)
 async def unregister_robot(
     robot_id: str,
-    current_user: User = Depends(get_current_user),
     robot_manager: RobotManager = Depends(get_robot_manager)
 ):
     """
@@ -193,9 +187,6 @@ async def unregister_robot(
     Args:
         robot_id: 机器人ID
     """
-    # 检查权限：只有超级管理员、管理员、运维人员可以注销机器人
-    if not can_manage_robots(current_user):
-        raise HTTPException(status_code=403, detail="Permission denied: Only administrators and operators can unregister robots")
     
     try:
         success = await robot_manager.unregister_robot(robot_id)
@@ -210,11 +201,10 @@ async def unregister_robot(
 
 @router.get("/", response_model=List[dict])
 async def list_robots(
-    current_user: User = Depends(get_current_user),
     robot_manager: RobotManager = Depends(get_robot_manager)
 ):
     """
-    获取所有机器人列表（包含ID和base_url）
+    获取所有机器人列表（包含ID、base_url和停用状态）
     """
     robots = []
     for robot_id in robot_manager.list_robots():
@@ -222,7 +212,8 @@ async def list_robots(
         if agent:
             robots.append({
                 "robot_id": robot_id,
-                "base_url": agent.base_url
+                "base_url": agent.base_url,
+                "disabled": robot_manager.is_robot_disabled(robot_id)
             })
     return robots
 
@@ -332,7 +323,6 @@ async def debug_robot_connection(
 @router.post("/{robot_id}/go-home", response_model=dict)
 async def go_home(
     robot_id: str,
-    current_user: User = Depends(get_current_user),
     robot_manager: RobotManager = Depends(get_robot_manager)
 ):
     """
@@ -367,6 +357,11 @@ async def go_home(
                 reason = result.state.get("reason", "")
                 status = result.state.get("status")
                 
+                logger.info(
+                    f"Robot {robot_id} go-home action check: "
+                    f"action_id={action_id}, result={result_code}, status={status}, reason={reason}"
+                )
+                
                 # 如果action立即失败，返回错误信息
                 if result_code == -1:
                     error_msg = f"回桩失败: {reason}" if reason else "回桩失败: 未知错误"
@@ -375,6 +370,15 @@ async def go_home(
                     logger.error(f"Robot {robot_id} go-home failed immediately: {error_msg}")
                     raise HTTPException(
                         status_code=400, 
+                        detail=error_msg
+                    )
+                
+                # 如果status为4（Done）且result为-1，说明已经失败
+                if status == 4 and result_code == -1:
+                    error_msg = f"回桩失败: {reason}" if reason else "回桩失败: 未知错误"
+                    logger.error(f"Robot {robot_id} go-home action already done with failure: {error_msg}")
+                    raise HTTPException(
+                        status_code=400,
                         detail=error_msg
                     )
             
@@ -402,10 +406,59 @@ async def go_home(
         raise HTTPException(status_code=500, detail=f"回桩失败: {error_detail}")
 
 
+@router.post("/{robot_id}/disable", response_model=dict)
+async def disable_robot(
+    robot_id: str,
+    robot_manager: RobotManager = Depends(get_robot_manager)
+):
+    """
+    停用机器人（停用的机器人将无法执行任何调度任务）
+    
+    Args:
+        robot_id: 机器人ID
+    """
+    if robot_id not in robot_manager.robots:
+        raise HTTPException(status_code=404, detail=f"Robot {robot_id} not found")
+    
+    success = robot_manager.disable_robot(robot_id)
+    if success:
+        return {
+            "robot_id": robot_id,
+            "disabled": True,
+            "message": f"Robot {robot_id} has been disabled"
+        }
+    else:
+        raise HTTPException(status_code=500, detail=f"Failed to disable robot {robot_id}")
+
+
+@router.post("/{robot_id}/enable", response_model=dict)
+async def enable_robot(
+    robot_id: str,
+    robot_manager: RobotManager = Depends(get_robot_manager)
+):
+    """
+    启用机器人
+    
+    Args:
+        robot_id: 机器人ID
+    """
+    if robot_id not in robot_manager.robots:
+        raise HTTPException(status_code=404, detail=f"Robot {robot_id} not found")
+    
+    success = robot_manager.enable_robot(robot_id)
+    if success:
+        return {
+            "robot_id": robot_id,
+            "disabled": False,
+            "message": f"Robot {robot_id} has been enabled"
+        }
+    else:
+        raise HTTPException(status_code=500, detail=f"Failed to enable robot {robot_id}")
+
+
 @router.post("/{robot_id}/sync-map", response_model=dict)
 async def sync_map(
     robot_id: str,
-    current_user: User = Depends(get_current_user),
     robot_manager: RobotManager = Depends(get_robot_manager)
 ):
     """
@@ -620,6 +673,7 @@ async def get_all_robots_states(
                 return {
                     "robot_id": robot_id,
                     "base_url": base_url,  # 添加IP地址
+                    "disabled": robot_manager.is_robot_disabled(robot_id),  # 添加停用状态
                     "pose": {
                         "x": state.pose.x if state.pose else 0.0,
                         "y": state.pose.y if state.pose else 0.0,
@@ -652,6 +706,7 @@ async def get_all_robots_states(
                 return {
                     "robot_id": robot_id,
                     "base_url": base_url,  # 添加IP地址
+                    "disabled": robot_manager.is_robot_disabled(robot_id),  # 添加停用状态
                     "pose": {"x": 0.0, "y": 0.0, "yaw": 0.0},
                     "status": "offline",
                     "speed": {"vx": 0.0, "vy": 0.0, "omega": 0.0},
@@ -665,6 +720,7 @@ async def get_all_robots_states(
             return {
                 "robot_id": robot_id,
                 "base_url": base_url,  # 添加IP地址
+                "disabled": robot_manager.is_robot_disabled(robot_id),  # 添加停用状态
                 "pose": {
                     "x": state.pose.x if state.pose else 0.0,
                     "y": state.pose.y if state.pose else 0.0,

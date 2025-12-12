@@ -27,6 +27,7 @@ class RobotManager:
         self.robots: Dict[str, RobotAgent] = {}  # robot_id -> RobotAgent
         self.robot_states: Dict[str, RobotState] = {}  # robot_id -> RobotState
         self._update_task: Optional[asyncio.Task] = None
+        self.disabled_robots: set[str] = set()  # 停用的机器人ID集合
         
         # 确保数据目录存在
         self.STORAGE_FILE.parent.mkdir(parents=True, exist_ok=True)
@@ -679,6 +680,12 @@ class RobotManager:
                 self._pending_robots = []
                 return
             
+            # 加载停用的机器人列表
+            disabled_robots = data.get('disabled_robots', [])
+            if isinstance(disabled_robots, list):
+                self.disabled_robots = set(disabled_robots)
+                logger.info(f"Loaded {len(self.disabled_robots)} disabled robots from storage file")
+            
             # 保存待加载的机器人信息
             self._pending_robots = robots_data
             logger.info(f"Found {len(robots_data)} robots in storage file, will load them on startup")
@@ -716,15 +723,16 @@ class RobotManager:
             except Exception as e:
                 logger.error(f"Error loading robot {robot_id} from storage file: {e}", exc_info=True)
         
-        # 并发加载所有机器人，并设置全局超时（最多等待3秒）
+        # 并发加载所有机器人，并设置全局超时（最多等待10秒）
         # 即使所有机器人连接失败，也要确保服务能正常启动
+        # 增加超时时间，确保机器人有足够时间完成注册（即使连接失败）
         try:
             await asyncio.wait_for(
                 asyncio.gather(*[load_single_robot(robot_info) for robot_info in self._pending_robots], return_exceptions=True),
-                timeout=3.0  # 最多等待3秒，即使有5个机器人，每个0.5秒超时，3秒也足够了
+                timeout=10.0  # 增加到10秒，确保机器人有足够时间完成注册
             )
         except asyncio.TimeoutError:
-            logger.warning(f"Robot loading timeout after 3 seconds. Some robots may not be loaded yet. They will be retried in background.")
+            logger.warning(f"Robot loading timeout after 10 seconds. Some robots may not be loaded yet. They will be retried in background.")
         
         # 清空待加载列表
         self._pending_robots = []
@@ -745,6 +753,7 @@ class RobotManager:
             
             data = {
                 'robots': robots_data,
+                'disabled_robots': list(self.disabled_robots),
                 'last_updated': datetime.now().isoformat()
             }
             
@@ -760,6 +769,65 @@ class RobotManager:
             
         except Exception as e:
             logger.error(f"Failed to save robots to storage file {self.STORAGE_FILE}: {e}", exc_info=True)
+    
+    def disable_robot(self, robot_id: str) -> bool:
+        """
+        停用机器人（停用的机器人将无法执行任何调度任务）
+        
+        Args:
+            robot_id: 机器人ID
+            
+        Returns:
+            是否停用成功
+        """
+        if robot_id not in self.robots:
+            logger.warning(f"Cannot disable robot {robot_id}: robot not found")
+            return False
+        
+        self.disabled_robots.add(robot_id)
+        self._save_robots_to_file()
+        logger.info(f"Robot {robot_id} has been disabled")
+        return True
+    
+    def enable_robot(self, robot_id: str) -> bool:
+        """
+        启用机器人
+        
+        Args:
+            robot_id: 机器人ID
+            
+        Returns:
+            是否启用成功
+        """
+        if robot_id not in self.robots:
+            logger.warning(f"Cannot enable robot {robot_id}: robot not found")
+            return False
+        
+        self.disabled_robots.discard(robot_id)
+        self._save_robots_to_file()
+        logger.info(f"Robot {robot_id} has been enabled")
+        return True
+    
+    def is_robot_disabled(self, robot_id: str) -> bool:
+        """
+        检查机器人是否被停用
+        
+        Args:
+            robot_id: 机器人ID
+            
+        Returns:
+            是否被停用
+        """
+        return robot_id in self.disabled_robots
+    
+    def list_available_robots(self) -> list[str]:
+        """
+        获取所有可用的机器人ID列表（排除停用的机器人）
+        
+        Returns:
+            可用的机器人ID列表
+        """
+        return [robot_id for robot_id in self.robots.keys() if robot_id not in self.disabled_robots]
     
     async def _register_robot_internal(self, robot_id: str, base_url: str, save_to_file: bool = True) -> Tuple[bool, Optional[str]]:
         """

@@ -326,3 +326,14 @@ http://10.160.129.23:1448/api/core/artifact/v1/lines/walls
     }
   }
 ]
+19. 根据acion_id 查询任务完成状态
+http://10.160.128.150:1448/api/core/motion/v1/actions/4526
+响应：
+{
+  "action_id": 4526,
+  "state": {
+    "reason": "",
+    "result": 0,
+    "status": 4
+  }
+}

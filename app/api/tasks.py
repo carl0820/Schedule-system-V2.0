@@ -4,28 +4,30 @@
 import logging
 import math
 import time
-from fastapi import APIRouter, HTTPException, Depends, Query
-from typing import List, Optional, Dict, Any
+import asyncio
+from fastapi import APIRouter, HTTPException, Depends, Query, Request, Body
+from typing import List, Optional, Dict, Any, Annotated
+import json
 from app.models.task import Task, TaskCreate, TaskStatus, MultiActionTaskCreate, TaskCreateResponse
 from app.services.task_scheduler import TaskScheduler, get_task_scheduler
 from app.services.map_manager import MapManager, get_map_manager
 from app.services.robot_manager import RobotManager, get_robot_manager
-from app.core.auth import get_current_user
-from app.models.user import User
+# 认证已移除，所有API端点无需授权即可调用
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
 
-@router.post("/", response_model=Task)
+
+
+@router.post("/", response_model=Task, summary="创建单点任务")
 async def create_task(
     task: TaskCreate,
-    current_user: User = Depends(get_current_user),
     task_scheduler: TaskScheduler = Depends(get_task_scheduler),
     map_manager: MapManager = Depends(get_map_manager)
 ):
     """
-    创建单点任务
+   创建单点任务
     
     返回完整的任务信息，包括 task_id、status、created_at 等。
     使用返回的 task_id 可以查询任务状态：GET /api/tasks/{task_id}
@@ -41,7 +43,9 @@ async def create_task(
     Returns:
         Task: 创建的任务对象，包含 task_id、status、created_at 等字段
     """
+    logger.info(f"API: Received single-point task creation request: target_pose={task.target_pose}, poi_name={task.poi_name}, priority={task.priority}")
     try:
+        
         # 验证地图是否已加载
         map_info = map_manager.get_map_info()
         if not map_info:
@@ -66,10 +70,15 @@ async def create_task(
                 )
         
         # 创建任务
+        logger.info("API: Starting task creation in scheduler...")
         api_start_time = time.time()
-        created_task = await task_scheduler.create_task(task)
-        api_elapsed = time.time() - api_start_time
-        logger.info(f"Single-point task created via API: {created_task.task_id}, API elapsed={api_elapsed:.3f}s")
+        try:
+            created_task = await task_scheduler.create_task(task)
+            api_elapsed = time.time() - api_start_time
+            logger.info(f"API: Single-point task created successfully: task_id={created_task.task_id}, status={created_task.status.value}, API elapsed={api_elapsed:.3f}s")
+        except Exception as e:
+            logger.error(f"API: Task creation failed in scheduler: {e}", exc_info=True)
+            raise
         
         # 确保返回的任务包含 task_id
         if not created_task.task_id:
@@ -80,31 +89,26 @@ async def create_task(
         
         # 返回 Task 对象，FastAPI 会自动序列化为 JSON，包含所有字段包括 task_id
         return created_task
-    except HTTPException:
+    except HTTPException as e:
+        logger.warning(f"API: Task creation rejected: {e.status_code} - {e.detail}")
         raise
     except Exception as e:
-        logger.error(f"Failed to create task: {e}", exc_info=True)
+        logger.error(f"API: Failed to create task: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to create task: {str(e)}")
 
 
 @router.get("/{task_id}", response_model=Task)
 async def get_task(
     task_id: str,
-    current_user: User = Depends(get_current_user),
     task_scheduler: TaskScheduler = Depends(get_task_scheduler)
 ):
     """
     获取任务信息
     
-    所有已认证的用户都可以查看任务详情，无需特殊权限。
-    
     Args:
         task_id: 任务ID
     """
     try:
-        # 记录访问日志（用于调试）
-        logger.debug(f"User {current_user.user_id} (role: {current_user.role}) requesting task {task_id}")
-        
         task = await task_scheduler.get_task(task_id)
         if task:
             return task
@@ -113,7 +117,7 @@ async def get_task(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error getting task {task_id} for user {current_user.user_id}: {e}", exc_info=True)
+        logger.error(f"Error getting task {task_id}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -142,13 +146,14 @@ async def list_tasks(
         sort_order: 排序方式 (asc/desc)
     """
     try:
-        # 在返回任务列表前，先更新执行中的任务状态
-        await task_scheduler._update_executing_tasks()
+        # 优化：不在API请求时同步更新任务状态，避免阻塞响应
+        # 任务状态更新在后台循环中自动进行，这里直接获取当前状态即可
+        # await task_scheduler._update_executing_tasks()  # 注释掉，避免阻塞
         tasks = await task_scheduler.list_tasks(status, robot_id)
         
-        # 优化：合并POI查询，只获取一次，同时构建位置映射和ID映射
+        # 优化：POI查询改为可选，如果超时则跳过（不影响任务列表显示）
         async def get_all_pois_data():
-            """获取所有POI点数据（合并查询，带超时控制）"""
+            """获取所有POI点数据（合并查询，带超时控制，快速失败）"""
             import asyncio
             import math
             
@@ -157,14 +162,14 @@ async def list_tasks(
             robot_ids = robot_manager.list_robots()
             
             async def get_robot_pois(robot_id: str):
-                """从单个机器人获取POI（带超时）"""
+                """从单个机器人获取POI（带超时，快速失败）"""
                 try:
                     agent = robot_manager.get_robot_agent(robot_id)
                     if agent:
-                        # 添加超时控制，每个机器人最多等待1.0秒（快速失败）
+                        # 缩短超时时间到0.5秒，快速失败
                         pois = await asyncio.wait_for(
                             agent.get_all_pois(),
-                            timeout=1.0
+                            timeout=0.5
                         )
                         for poi in pois:
                             # 构建ID映射
@@ -178,18 +183,28 @@ async def list_tasks(
                                 if key not in pois_map:
                                     pois_map[key] = poi.metadata.get("display_name", poi.id) if poi.metadata else poi.id
                 except asyncio.TimeoutError:
-                    logger.debug(f"Timeout getting POIs from robot {robot_id} (1.0s)")
+                    logger.debug(f"Timeout getting POIs from robot {robot_id} (0.5s)")
                 except Exception as e:
                     logger.debug(f"Failed to get POIs for robot {robot_id}: {e}")
             
-            # 并发获取所有机器人的POI
+            # 并发获取所有机器人的POI，但设置总体超时为2秒
             if robot_ids:
-                poi_tasks = [get_robot_pois(robot_id) for robot_id in robot_ids]
-                await asyncio.gather(*poi_tasks, return_exceptions=True)
+                try:
+                    poi_tasks = [get_robot_pois(robot_id) for robot_id in robot_ids]
+                    await asyncio.wait_for(
+                        asyncio.gather(*poi_tasks, return_exceptions=True),
+                        timeout=2.0
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning("POI query timeout (2.0s), continuing without POI data")
             
             return pois_map, pois_dict
         
-        pois_map, pois_dict = await get_all_pois_data()
+        # POI查询改为可选，如果失败不影响任务列表返回
+        # 优化：暂时跳过POI查询以提高响应速度（POI信息可以在任务详情中单独获取）
+        # POI查询可能很慢，导致API超时，先确保任务列表能快速返回
+        pois_map, pois_dict = {}, {}
+        logger.debug("Skipping POI query for faster response")
         
         def find_poi_name(x: float, y: float) -> Optional[str]:
             """根据坐标查找POI名称"""
@@ -283,41 +298,82 @@ async def list_tasks(
                 logger.warning(f"Invalid date format: start_date={start_date}, end_date={end_date}, error: {e}")
         
         # 将Task对象转换为字典，并添加target_poi_name字段
+        # 优化：限制处理的任务数量，避免处理过多任务导致超时
+        max_tasks_to_process = 1000  # 最多处理1000个任务
+        tasks_to_process = tasks[:max_tasks_to_process] if len(tasks) > max_tasks_to_process else tasks
+        
+        if len(tasks) > max_tasks_to_process:
+            logger.warning(f"Too many tasks ({len(tasks)}), only processing first {max_tasks_to_process} for performance")
+        
         result = []
-        for task in tasks:
+        for task in tasks_to_process:
             # 对于多动作任务，检查动作序列中是否有使用POI的动作
             target_poi_name = None
             if task.is_multi_action and task.actions:
-                # 查找第一个使用POI的移动动作
-                for action in task.actions:
+                # 查找最后一个使用POI的移动动作（用于显示目标位置）
+                last_move_action = None
+                for action in reversed(task.actions):
                     # action可能是ActionItem对象或字典
                     action_type = action.action_type if hasattr(action, 'action_type') else action.get('action_type')
                     if action_type == "move_to":
-                        # 检查是否有poi_name
-                        poi_name = None
-                        if hasattr(action, 'poi_name'):
-                            poi_name = action.poi_name
-                        elif isinstance(action, dict):
-                            poi_name = action.get('poi_name')
+                        last_move_action = action
+                        break
+                
+                if last_move_action:
+                    # 检查是否有poi_name
+                    poi_name = None
+                    if hasattr(last_move_action, 'poi_name'):
+                        poi_name = last_move_action.poi_name
+                    elif isinstance(last_move_action, dict):
+                        poi_name = last_move_action.get('poi_name')
+                    
+                    if poi_name:
+                        # 优先使用保存的显示名称（如果存在），否则从POI字典中获取
+                        poi_display_name = None
+                        if hasattr(last_move_action, 'poi_display_name'):
+                            poi_display_name = last_move_action.poi_display_name
+                        elif isinstance(last_move_action, dict):
+                            poi_display_name = last_move_action.get('poi_display_name')
                         
-                        if poi_name:
-                            # 优先使用保存的显示名称（如果存在），否则从POI字典中获取
-                            poi_display_name = None
-                            if hasattr(action, 'poi_display_name'):
-                                poi_display_name = action.poi_display_name
-                            elif isinstance(action, dict):
-                                poi_display_name = action.get('poi_display_name')
-                            
-                            if poi_display_name and poi_display_name.strip():
-                                # 使用保存的显示名称
-                                target_poi_name = poi_display_name
-                            elif pois_dict:
-                                # 如果机器人在线，从POI字典中获取显示名称
-                                target_poi_name = pois_dict.get(poi_name, poi_name)
-                            else:
-                                # 如果机器人离线且没有保存的显示名称，至少显示POI ID
-                                target_poi_name = poi_name
-                            break
+                        if poi_display_name and poi_display_name.strip():
+                            # 使用保存的显示名称
+                            target_poi_name = poi_display_name
+                        elif pois_dict:
+                            # 如果机器人在线，从POI字典中获取显示名称
+                            target_poi_name = pois_dict.get(poi_name, poi_name)
+                        else:
+                            # 如果机器人离线且没有保存的显示名称，至少显示POI ID
+                            target_poi_name = poi_name
+                        
+                        # 如果target_pose是(0,0,0)，尝试从POI获取实际坐标
+                        if task.target_pose and (task.target_pose.x == 0.0 and task.target_pose.y == 0.0):
+                            # 尝试从POI数据中获取实际坐标
+                            try:
+                                if task.robot_id:
+                                    agent = robot_manager.get_robot_agent(task.robot_id)
+                                    if agent:
+                                        pois = await asyncio.wait_for(agent.get_all_pois(), timeout=1.0)
+                                        for poi in pois:
+                                            if poi.id == poi_name or (poi.metadata and poi.metadata.get("display_name") == poi_name):
+                                                if poi.pose:
+                                                    # 更新target_pose为POI的实际坐标
+                                                    task.target_pose = poi.pose
+                                                    logger.debug(
+                                                        f"Updated task {task.task_id} target_pose from POI {poi_name}: "
+                                                        f"({poi.pose.x}, {poi.pose.y})"
+                                                    )
+                                                    break
+                            except Exception as e:
+                                logger.debug(f"Failed to get POI coordinates for task {task.task_id}: {e}")
+                    
+                    # 如果动作有target_pose，使用它
+                    elif hasattr(last_move_action, 'target_pose') and last_move_action.target_pose:
+                        task.target_pose = last_move_action.target_pose
+                    elif isinstance(last_move_action, dict) and last_move_action.get('target_pose'):
+                        from app.models.robot import Pose
+                        pose_data = last_move_action.get('target_pose')
+                        if isinstance(pose_data, dict):
+                            task.target_pose = Pose(**pose_data)
                 
                 # 如果没有找到POI，尝试通过坐标查找（只有当target_pose不是默认值时）
                 if not target_poi_name and task.target_pose:
@@ -379,7 +435,6 @@ async def list_tasks(
 @router.delete("/{task_id}", response_model=dict)
 async def cancel_task(
     task_id: str,
-    current_user: User = Depends(get_current_user),
     task_scheduler: TaskScheduler = Depends(get_task_scheduler)
 ):
     """
@@ -400,8 +455,32 @@ async def cancel_task(
 
 @router.post("/multi-action", response_model=Task)
 async def create_multi_action_task(
-    task: MultiActionTaskCreate,
-    current_user: User = Depends(get_current_user),
+    request_body: Dict[str, Any] = Body(
+        ...,
+        description="多动作任务创建请求。支持两种格式：1) 直接发送actions和priority；2) 发送包含value字段的Swagger示例格式（自动提取value内容）",
+        example={
+            "actions": [
+                {
+                    "action_type": "move_to",
+                    "target_pose": {
+                        "x": 3.8,
+                        "y": -2.9,
+                        "z": 0.0,
+                        "yaw": 0.0,
+                        "pitch": 0.0,
+                        "roll": 0.0
+                    },
+                    "acceptable_precision": 0.3,
+                    "speed_ratio": 1.0
+                },
+                {
+                    "action_type": "wait",
+                    "wait_duration": 10.0
+                }
+            ],
+            "priority": 1
+        }
+    ),
     task_scheduler: TaskScheduler = Depends(get_task_scheduler),
     map_manager: MapManager = Depends(get_map_manager)
 ):
@@ -429,19 +508,42 @@ async def create_multi_action_task(
     - 建议使用 `target_pose` 进行坐标导航，更简单可靠，不会出现 POI_NOT_FOUND 错误
     - `priority` 可选，如果不指定则系统自动计算（1-4，1最低，4最高）
     
+    **请求格式：**
+    - 方式1（推荐）：直接发送 `actions` 和 `priority`
+    - 方式2：发送包含 `value` 字段的Swagger示例格式（自动提取 `value` 内容）
+    
     **示例：**
     查看下方 "Examples" 下拉菜单，选择不同的示例进行测试。
     
     Args:
-        task: 多动作任务创建请求（只需指定actions，无需start_pose）
+        task: 多动作任务创建请求（支持直接格式或包含value字段的格式）
     
     Returns:
         Task: 创建的任务对象，包含 task_id、status、created_at 等字段
     """
     api_start = time.time()
-    logger.info(f"API: Received multi-action task creation request with {len(task.actions)} actions")
     
     try:
+        # 支持从Swagger示例格式中提取value字段
+        if "value" in request_body and isinstance(request_body["value"], dict):
+            # 如果请求体包含value字段（Swagger示例格式），提取其内容
+            task_data = request_body["value"]
+            logger.debug("Extracting task data from 'value' field (Swagger example format)")
+        else:
+            # 直接使用请求体（标准格式）
+            task_data = request_body
+        
+        # 将dict转换为MultiActionTaskCreate对象
+        try:
+            task = MultiActionTaskCreate(**task_data)
+        except Exception as e:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Invalid request format: {str(e)}. Please check that 'actions' is a list and all required fields are present."
+            )
+        
+        logger.info(f"API: Received multi-action task creation request with {len(task.actions)} actions, priority={task.priority}")
+        
         # 最小化验证：只检查地图是否已加载（快速检查）
         map_info = map_manager.get_map_info()
         if not map_info:
@@ -465,10 +567,8 @@ async def create_multi_action_task(
                 
                 # 坐标验证移到任务分配时进行（不在这里阻塞）
                 # POI验证也移到任务分配时进行
-                if has_poi_name:
-                    # 保存POI显示名称（如果前端提供了）
-                    if not hasattr(action, 'poi_display_name') or not action.poi_display_name:
-                        action.poi_display_name = action.poi_name
+                # 【修复】不要将poi_name（可能是UUID）直接赋值给poi_display_name
+                # 让调度器在执行时自动解析POI的display_name
             elif action.action_type == "wait":
                 if action.wait_duration is None or action.wait_duration <= 0:
                     raise HTTPException(
@@ -485,9 +585,14 @@ async def create_multi_action_task(
         
         # 立即创建任务（不等待任何耗时操作）
         logger.info(f"API: Calling task_scheduler.create_multi_action_task (elapsed: {time.time() - api_start:.3f}s)")
-        created_task = await task_scheduler.create_multi_action_task(task)
-        api_elapsed = time.time() - api_start
-        logger.info(f"API: Multi-action task created successfully: {created_task.task_id}, {len(task.actions)} actions, elapsed={api_elapsed:.3f}s")
+        logger.info("API: Starting multi-action task creation in scheduler...")
+        try:
+            created_task = await task_scheduler.create_multi_action_task(task)
+            api_elapsed = time.time() - api_start
+            logger.info(f"API: Multi-action task created successfully: task_id={created_task.task_id}, status={created_task.status.value}, {len(task.actions)} actions, elapsed={api_elapsed:.3f}s")
+        except Exception as e:
+            logger.error(f"API: Multi-action task creation failed in scheduler: {e}", exc_info=True)
+            raise
         
         # 确保返回的任务包含 task_id
         if not created_task.task_id:

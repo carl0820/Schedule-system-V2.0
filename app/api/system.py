@@ -7,6 +7,7 @@ from typing import Dict, Any, Optional
 from app.services.config_manager import get_config_manager
 from app.services.network_detector import get_network_detector, NetworkType
 from app.services.robot_manager import get_robot_manager
+from app.services.deadlock_monitor import get_deadlock_monitor
 
 router = APIRouter()
 
@@ -239,4 +240,66 @@ async def set_network_type(
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to set network type: {str(e)}")
+
+
+# ========== 死锁监控API ==========
+
+@router.get("/deadlock/stats")
+async def get_deadlock_stats():
+    """
+    获取死锁统计信息
+
+    Returns:
+        包含死锁检测、解除成功率、平均解除时间等统计信息
+    """
+    try:
+        deadlock_monitor = get_deadlock_monitor()
+        summary = deadlock_monitor.get_summary()
+
+        return {
+            "success": True,
+            "stats": summary
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get deadlock stats: {str(e)}")
+
+
+@router.get("/deadlock/alerts")
+async def get_deadlock_alerts():
+    """
+    获取死锁告警信息
+
+    Returns:
+        当前的死锁告警列表（高频率、高失败率、机器人频繁参与等）
+    """
+    try:
+        deadlock_monitor = get_deadlock_monitor()
+        alerts = deadlock_monitor.get_alerts()
+
+        return {
+            "success": True,
+            "alert_count": len(alerts),
+            "alerts": alerts
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get deadlock alerts: {str(e)}")
+
+
+@router.post("/deadlock/stats/reset")
+async def reset_deadlock_stats():
+    """
+    重置死锁统计信息
+
+    注意：此操作会清除所有历史统计数据
+    """
+    try:
+        deadlock_monitor = get_deadlock_monitor()
+        deadlock_monitor.reset_stats()
+
+        return {
+            "success": True,
+            "message": "Deadlock statistics reset successfully"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to reset deadlock stats: {str(e)}")
 

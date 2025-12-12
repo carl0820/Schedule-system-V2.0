@@ -807,38 +807,28 @@
         // 使用相对路径，自动适配当前域名和端口
         const API_BASE = window.location.origin;
         
-        // 检查登录状态
-        const token = localStorage.getItem('access_token');
-        if (!token) {
-            window.location.href = '/static/login.html';
-        }
-        
+        // 认证已移除，所有API端点无需授权即可调用
         // 全局变量：当前用户信息
         let currentUser = null;
-        
-        // 添加认证头到所有fetch请求
-        const originalFetch = window.fetch;
-        window.fetch = function(...args) {
-            const [url, options = {}] = args;
-            const urlString = typeof url === 'string' ? url : url.toString();
-            // 检查 URL 是否包含 /api/ 路径（支持相对路径和绝对路径）
-            if (urlString.includes('/api/')) {
-                options.headers = {
-                    ...options.headers,
-                    'Authorization': `Bearer ${token}`
-                };
-            }
-            return originalFetch.apply(this, args);
-        };
         
         // 检查用户权限，显示用户管理链接
         async function checkUserPermissions() {
             try {
+                // 尝试从 localStorage 获取 token（如果存在）
+                const token = localStorage.getItem('access_token');
+                
+                // 如果没有 token，显示默认用户信息
+                if (!token) {
+                    updateUserDisplay('访客', '访客');
+                    return;
+                }
+                
                 const response = await fetch('/api/auth/me', {
                     headers: {
                         'Authorization': `Bearer ${token}`
                     }
                 });
+                
                 if (response.ok) {
                     const user = await response.json();
                     // 保存到全局变量
@@ -858,37 +848,48 @@
                         'user': '普通用户'
                     };
                     
-                    // 更新按钮中的用户名
-                    const userNameItem = document.getElementById('currentUserName');
-                    const userRoleItem = document.getElementById('currentUserRole');
-                    if (userNameItem) {
-                        userNameItem.textContent = user.username;
-                    }
-                    if (userRoleItem) {
-                        userRoleItem.textContent = roleNames[user.role] || user.role;
-                    }
-                    
-                    // 更新下拉菜单中的用户信息
-                    const userDisplayName = document.getElementById('currentUserDisplayName');
-                    const userDisplayRole = document.getElementById('currentUserDisplayRole');
-                    const userAvatar = document.getElementById('userAvatar');
-                    const userAvatarLarge = document.getElementById('userAvatarLarge');
-                    
-                    if (userDisplayName) {
-                        userDisplayName.textContent = user.username;
-                    }
-                    if (userDisplayRole) {
-                        userDisplayRole.textContent = roleNames[user.role] || user.role;
-                    }
-                    if (userAvatar) {
-                        userAvatar.textContent = user.username.charAt(0).toUpperCase();
-                    }
-                    if (userAvatarLarge) {
-                        userAvatarLarge.textContent = user.username.charAt(0).toUpperCase();
-                    }
+                    updateUserDisplay(user.username, roleNames[user.role] || user.role, user.username.charAt(0).toUpperCase());
+                } else {
+                    // API 调用失败，显示默认用户信息
+                    console.warn('Failed to get user info, status:', response.status);
+                    updateUserDisplay('访客', '访客');
                 }
             } catch (error) {
                 console.error('Failed to check user permissions:', error);
+                // 发生错误时，显示默认用户信息
+                updateUserDisplay('访客', '访客');
+            }
+        }
+        
+        // 更新用户显示信息的辅助函数
+        function updateUserDisplay(username, role, avatar = 'U') {
+            // 更新按钮中的用户名
+            const userNameItem = document.getElementById('currentUserName');
+            const userRoleItem = document.getElementById('currentUserRole');
+            if (userNameItem) {
+                userNameItem.textContent = username;
+            }
+            if (userRoleItem) {
+                userRoleItem.textContent = role;
+            }
+            
+            // 更新下拉菜单中的用户信息
+            const userDisplayName = document.getElementById('currentUserDisplayName');
+            const userDisplayRole = document.getElementById('currentUserDisplayRole');
+            const userAvatar = document.getElementById('userAvatar');
+            const userAvatarLarge = document.getElementById('userAvatarLarge');
+            
+            if (userDisplayName) {
+                userDisplayName.textContent = username;
+            }
+            if (userDisplayRole) {
+                userDisplayRole.textContent = role;
+            }
+            if (userAvatar) {
+                userAvatar.textContent = avatar;
+            }
+            if (userAvatarLarge) {
+                userAvatarLarge.textContent = avatar;
             }
         }
         
@@ -897,6 +898,11 @@
             // 如果全局变量中没有用户信息，尝试获取
             if (!currentUser) {
                 try {
+                    const token = localStorage.getItem('access_token');
+                    if (!token) {
+                        alert('未登录，无法修改密码');
+                        return;
+                    }
                     const response = await fetch('/api/auth/me', {
                         headers: {
                             'Authorization': `Bearer ${token}`
@@ -934,6 +940,11 @@
             }
             
             try {
+                const token = localStorage.getItem('access_token');
+                if (!token) {
+                    alert('未登录，无法修改密码');
+                    return;
+                }
                 const response = await fetch(`${API_BASE}/api/auth/users/${currentUser.user_id}/change-password`, {
                     method: 'POST',
                     headers: {
@@ -1254,21 +1265,22 @@
                     data.virtual_walls = [];
                 }
                 
-                // 调试日志：检查虚拟墙数据
-                console.log('Received visualization data:', {
-                    hasVirtualWalls: 'virtual_walls' in data,
-                    virtualWallsType: typeof data.virtual_walls,
-                    virtualWallsLength: data.virtual_walls ? data.virtual_walls.length : 'N/A',
-                    virtualWallsValue: data.virtual_walls,
-                    hasMap: !!data.map,
-                    hasMapInfo: !!(data.map && data.map.info),
-                    robotsCount: data.robots ? data.robots.length : 0
-                });
-                
-                // 如果虚拟墙数据存在，打印详细信息
+                // 调试日志：检查虚拟墙数据（仅在首次加载或数据变化时输出）
                 if (data.virtual_walls && data.virtual_walls.length > 0) {
-                    console.log(`✓ Found ${data.virtual_walls.length} virtual walls:`, data.virtual_walls);
-                } else {
+                    // 只在控制台详细模式下输出（可通过设置 window.DEBUG_MODE = true 启用）
+                    if (window.DEBUG_MODE) {
+                        console.log('Received visualization data:', {
+                            hasVirtualWalls: 'virtual_walls' in data,
+                            virtualWallsType: typeof data.virtual_walls,
+                            virtualWallsLength: data.virtual_walls ? data.virtual_walls.length : 'N/A',
+                            virtualWallsValue: data.virtual_walls,
+                            hasMap: !!data.map,
+                            hasMapInfo: !!(data.map && data.map.info),
+                            robotsCount: data.robots ? data.robots.length : 0
+                        });
+                        console.log(`✓ Found ${data.virtual_walls.length} virtual walls:`, data.virtual_walls);
+                    }
+                } else if (window.DEBUG_MODE) {
                     console.warn('✗ No virtual walls in response data');
                 }
                 
@@ -1575,7 +1587,10 @@
                 const taskCount = data && data.tasks ? data.tasks.length : 0;
                 document.getElementById('robotCount').textContent = robotCount;
                 document.getElementById('taskCount').textContent = taskCount;
-                console.log(`系统状态更新 - 在线机器人数量: ${robotCount}/${robots.length}, 任务数量: ${taskCount}`);
+                // 只在调试模式下输出系统状态更新日志
+                if (window.DEBUG_MODE) {
+                    console.log(`系统状态更新 - 在线机器人数量: ${robotCount}/${robots.length}, 任务数量: ${taskCount}`);
+                }
             } catch (error) {
                 console.error('Error updating status:', error);
             }
@@ -1837,7 +1852,10 @@
             
             // 绘制虚拟墙
             if (mapData.virtual_walls && mapData.virtual_walls.length > 0) {
-                console.log(`Drawing ${mapData.virtual_walls.length} virtual walls`);
+                // 只在调试模式下输出详细日志
+                if (window.DEBUG_MODE) {
+                    console.log(`Drawing ${mapData.virtual_walls.length} virtual walls`);
+                }
                 ctx.strokeStyle = '#ff9800'; // 橙色
                 ctx.lineWidth = 3;
                 ctx.setLineDash([5, 5]); // 虚线样式
@@ -1861,7 +1879,10 @@
                         ctx.lineTo(endX, endY);
                         ctx.stroke();
                         
-                        console.log(`Virtual wall ${index + 1}: (${wall.start.x.toFixed(2)}, ${wall.start.y.toFixed(2)}) -> (${wall.end.x.toFixed(2)}, ${wall.end.y.toFixed(2)})`);
+                        // 只在调试模式下输出每个虚拟墙的详细信息
+                        if (window.DEBUG_MODE) {
+                            console.log(`Virtual wall ${index + 1}: (${wall.start.x.toFixed(2)}, ${wall.start.y.toFixed(2)}) -> (${wall.end.x.toFixed(2)}, ${wall.end.y.toFixed(2)})`);
+                        }
                     } else {
                         console.warn(`Virtual wall ${index + 1} missing start or end coordinates:`, wall);
                     }
@@ -2119,14 +2140,16 @@
                 const response = await fetch(`${API_BASE}/api/tasks/`, {
                     method: 'POST',
                     headers: {
-                        'Content-Type': 'application/json',
-                        'Authorization': `Bearer ${token}`
+                        'Content-Type': 'application/json'
                     },
                     body: JSON.stringify({
                         target_pose: {
                             x: targetX,
                             y: targetY,
-                            yaw: targetYaw
+                            z: 0.0,
+                            yaw: targetYaw,
+                            pitch: 0.0,
+                            roll: 0.0
                         },
                         priority: 2
                     }),
@@ -2145,8 +2168,33 @@
                         refreshDataSilently();
                     }, 1000);
                 } else {
-                    const error = await response.json();
-                    alert('任务创建失败: ' + (error.detail || '未知错误'));
+                    let errorMessage = '未知错误';
+                    try {
+                        const errorData = await response.json();
+                        // 安全地提取错误信息
+                        if (errorData.detail) {
+                            if (typeof errorData.detail === 'string') {
+                                errorMessage = errorData.detail;
+                            } else if (typeof errorData.detail === 'object') {
+                                errorMessage = JSON.stringify(errorData.detail);
+                            } else {
+                                errorMessage = String(errorData.detail);
+                            }
+                        } else if (errorData.message) {
+                            errorMessage = typeof errorData.message === 'string' ? errorData.message : JSON.stringify(errorData.message);
+                        } else {
+                            errorMessage = `HTTP ${response.status}: ${response.statusText}`;
+                        }
+                    } catch (e) {
+                        // 如果无法解析JSON，尝试读取文本
+                        try {
+                            const errorText = await response.text();
+                            errorMessage = errorText || `HTTP ${response.status}: ${response.statusText}`;
+                        } catch (e2) {
+                            errorMessage = `HTTP ${response.status}: ${response.statusText}`;
+                        }
+                    }
+                    alert('任务创建失败: ' + errorMessage);
                 }
             } catch (error) {
                 // 如果是超时错误，任务可能已经创建成功，只是响应慢
@@ -2158,7 +2206,20 @@
                         refreshDataSilently();
                     }, 1000);
                 } else {
-                    alert('任务创建失败: ' + (error.message || '未知错误'));
+                    // 安全地提取错误信息
+                    let errorMessage = '未知错误';
+                    if (error && typeof error === 'object') {
+                        if (error.message) {
+                            errorMessage = String(error.message);
+                        } else if (error.detail) {
+                            errorMessage = typeof error.detail === 'string' ? error.detail : JSON.stringify(error.detail);
+                        } else {
+                            errorMessage = JSON.stringify(error);
+                        }
+                    } else if (error) {
+                        errorMessage = String(error);
+                    }
+                    alert('任务创建失败: ' + errorMessage);
                 }
             } finally {
                 // 恢复按钮状态

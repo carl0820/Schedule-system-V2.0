@@ -543,26 +543,7 @@
     <script>
         const API_BASE = window.location.origin;
         
-        // 检查登录状态
-        const token = localStorage.getItem('access_token');
-        if (!token) {
-            window.location.href = '/static/login.html';
-        }
-        
-        // 添加认证头到所有fetch请求
-        const originalFetch = window.fetch;
-        window.fetch = function(...args) {
-            const [url, options = {}] = args;
-            const urlString = typeof url === 'string' ? url : url.toString();
-            // 检查 URL 是否包含 /api/ 路径（支持相对路径和绝对路径）
-            if (urlString.includes('/api/')) {
-                options.headers = {
-                    ...options.headers,
-                    'Authorization': `Bearer ${token}`
-                };
-            }
-            return originalFetch.apply(this, args);
-        };
+        // 认证已移除，所有API端点无需授权即可调用
         let actions = [];
         let pois = [];
         
@@ -1234,8 +1215,7 @@
                 const response = await fetch(`${API_BASE}/api/tasks/multi-action`, {
                     method: 'POST',
                     headers: {
-                        'Content-Type': 'application/json',
-                        'Authorization': `Bearer ${token}`
+                        'Content-Type': 'application/json'
                     },
                     body: JSON.stringify(requestData),
                     signal: controller.signal
@@ -1334,11 +1314,29 @@
                 } else {
                     let errorMessage = '未知错误';
                     try {
-                        const error = await response.json();
-                        errorMessage = error.detail || error.message || `HTTP ${response.status}: ${response.statusText}`;
+                        const errorData = await response.json();
+                        // 安全地提取错误信息
+                        if (errorData.detail) {
+                            if (typeof errorData.detail === 'string') {
+                                errorMessage = errorData.detail;
+                            } else if (typeof errorData.detail === 'object') {
+                                errorMessage = JSON.stringify(errorData.detail);
+                            } else {
+                                errorMessage = String(errorData.detail);
+                            }
+                        } else if (errorData.message) {
+                            errorMessage = typeof errorData.message === 'string' ? errorData.message : JSON.stringify(errorData.message);
+                        } else {
+                            errorMessage = `HTTP ${response.status}: ${response.statusText}`;
+                        }
                     } catch (e) {
-                        // 如果无法解析JSON，使用状态文本
-                        errorMessage = `HTTP ${response.status}: ${response.statusText}`;
+                        // 如果无法解析JSON，尝试读取文本
+                        try {
+                            const errorText = await response.text();
+                            errorMessage = errorText || `HTTP ${response.status}: ${response.statusText}`;
+                        } catch (e2) {
+                            errorMessage = `HTTP ${response.status}: ${response.statusText}`;
+                        }
                     }
                     showAlert('任务创建失败: ' + errorMessage, 'error');
                     console.error('Task creation failed:', response.status, errorMessage);
@@ -1481,7 +1479,20 @@
                         isSubmitting = false;
                     }, 2000);
                 } else {
-                    showAlert('任务创建失败: ' + (error.message || '未知错误'), 'error');
+                    // 安全地提取错误信息
+                    let errorMessage = '未知错误';
+                    if (error && typeof error === 'object') {
+                        if (error.message) {
+                            errorMessage = String(error.message);
+                        } else if (error.detail) {
+                            errorMessage = typeof error.detail === 'string' ? error.detail : JSON.stringify(error.detail);
+                        } else {
+                            errorMessage = JSON.stringify(error);
+                        }
+                    } else if (error) {
+                        errorMessage = String(error);
+                    }
+                    showAlert('任务创建失败: ' + errorMessage, 'error');
                     
                     // 恢复按钮状态
                     if (submitButton) {

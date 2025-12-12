@@ -58,24 +58,50 @@ class ConfigManager:
         """获取默认配置"""
         return {
             "deadlock": {
+                # ========== 死锁检测阈值（针对思岚底盘优化） ==========
                 "deadlock_threshold": 10.0,  # 死锁判定阈值（秒，通用）
-                "narrow_passage_deadlock_threshold": 3.0,  # 窄道死锁判定阈值（秒）
-                "circular_wait_deadlock_threshold": 10.0,  # 循环等待死锁判定阈值（秒）
-                "mutual_blocking_deadlock_threshold": 1.5,  # 相互阻塞死锁判定阈值（秒，降低以更快响应）
+                "narrow_passage_deadlock_threshold": 2.5,  # 窄道死锁判定阈值（秒）- 优化：从3.0降低到2.5，更快响应
+                "circular_wait_deadlock_threshold": 6.0,  # 循环等待死锁判定阈值（秒）- 优化：从10.0降低到6.0，提高响应速度
+                "mutual_blocking_deadlock_threshold": 1.5,  # 相互阻塞死锁判定阈值（秒）- 保持1.5秒，快速响应
+
+                # ========== 距离和避让参数（针对思岚底盘调优） ==========
                 "narrow_passage_threshold": 1.0,  # 窄道阈值（米）
-                "narrow_passage_backoff_distance": 1.0,  # 窄道死锁后退距离（米）
-                "circular_wait_backoff_distance": 1.5,  # 循环等待死锁后退距离（米）
-                "mutual_blocking_backoff_distance": 1.0,  # 相互阻塞死锁后退距离（米）
-                "default_backoff_distance": 1.0,  # 默认后退距离（米）
+                "narrow_passage_backoff_distance": 1.5,  # 窄道死锁后退距离（米）- 优化：从1.0增加到1.5，确保足够距离
+                "circular_wait_backoff_distance": 2.0,  # 循环等待死锁后退距离（米）- 优化：从1.5增加到2.0，确保解锁
+                "mutual_blocking_backoff_distance": 1.5,  # 相互阻塞死锁后退距离（米）- 优化：从1.0增加到1.5
+                "default_backoff_distance": 1.5,  # 默认后退距离（米）- 优化：从1.0增加到1.5
                 "backoff_speed_ratio": 0.5,  # 后退速度比例
-                "backoff_acceptable_precision": 0.2,  # 后退到达精度（米）
-                "robot_stuck_threshold": 0.1,  # 机器人卡住判定阈值（米）
-                "robot_stuck_time_window": 10.0,  # 机器人卡住时间窗口（秒）
-                "mutual_blocking_distance": 1.0,  # 相互阻塞判定距离（米）
-                "narrow_passage_detection_distance": 2.0,  # 窄道检测距离（米）
+                "backoff_acceptable_precision": 0.3,  # 后退到达精度（米）- 优化：从0.2放宽到0.3，避免过于严格
+
+                # ========== 卡住检测参数 ==========
+                "robot_stuck_threshold": 0.15,  # 机器人卡住判定阈值（米）- 优化：从0.1放宽到0.15，减少误判
+                "robot_stuck_time_window": 8.0,  # 机器人卡住时间窗口（秒）- 优化：从10.0降低到8.0，更快检测
+
+                # ========== 距离检测参数 ==========
+                "mutual_blocking_distance": 1.5,  # 相互阻塞判定距离（米）- 优化：从1.0增加到1.5，提前检测
+                "narrow_passage_detection_distance": 2.5,  # 窄道检测距离（米）- 优化：从2.0增加到2.5，提前预警
+
+                # ========== 历史和等待点 ==========
                 "history_retention_time": 60.0,  # 死锁历史保留时间（秒）
                 "waiting_point_min_distance": 2.0,  # 等待点最小距离（米）
-                "waiting_point_max_distance": 5.0,  # 等待点最大距离（米）
+                "waiting_point_max_distance": 6.0,  # 等待点最大距离（米）- 优化：从5.0增加到6.0，扩大搜索范围
+                "waiting_point_search_step": 0.5,  # 等待点搜索步长（米）- 新增：用于等待点计算
+                "waiting_point_safety_margin": 0.8,  # 等待点安全裕度（米）- 新增：确保等待点足够安全
+
+                # ========== 预定义等待点 ==========
+                "predefined_waiting_points": [],  # 预定义等待点列表 [{"x": float, "y": float, "z": float, "yaw": float, "name": str}]
+                "use_predefined_waiting_points": True,  # 是否优先使用预定义等待点
+
+                # ========== 区域锁（针对思岚底盘的通道管理） ==========
+                "area_lock_enabled": True,  # 是否启用区域锁
+                "area_lock_timeout": 25.0,  # 区域锁超时时间（秒）- 优化：从30.0降低到25.0，避免长时间占用
+                "area_lock_detection_radius": 3.5,  # 区域锁检测半径（米）- 优化：从3.0增加到3.5，提前预留
+
+                # ========== 新增：思岚底盘特定参数 ==========
+                "slamware_action_timeout": 120.0,  # 思岚底盘动作超时（秒）- 新增：超过此时间认为动作失败
+                "slamware_recovery_enabled": True,  # 是否启用思岚底盘自动恢复（新增）
+                "slamware_recovery_max_attempts": 2,  # 思岚底盘恢复最大尝试次数（新增）
+
                 "updated_at": datetime.now().isoformat()
             },
             "updated_at": datetime.now().isoformat()

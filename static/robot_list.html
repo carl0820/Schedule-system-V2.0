@@ -880,6 +880,7 @@
                 const speed = robot.speed || { vx: 0, vy: 0, omega: 0 };
                 const power = robot.power || { batteryPercentage: 0, isCharging: false };
                 const health = robot.health || { hasError: false, hasFatal: false };
+                const disabled = robot.disabled || false;
                 
                 const speedValue = Math.sqrt(speed.vx * speed.vx + speed.vy * speed.vy).toFixed(2);
                 const batteryPercentage = power.batteryPercentage || 0;
@@ -899,8 +900,13 @@
                     statusText = '错误';
                 }
                 
+                // 如果机器人被停用，添加停用标识
+                if (disabled) {
+                    statusText += ' (已停用)';
+                }
+                
                 return `
-                    <div class="robot-card">
+                    <div class="robot-card" ${disabled ? 'style="opacity: 0.6; border-left: 4px solid #FF9500;"' : ''}>
                         <div class="robot-header">
                             <div class="robot-title">🤖 ${robot.robot_id || 'Unknown'}</div>
                             <span class="robot-status ${status}">${statusText}</span>
@@ -986,6 +992,15 @@
                                     同步地图
                                 </button>
                             ` : ''}
+                            ${disabled ? `
+                                <button class="btn-small btn-enable" onclick="enableRobot('${robot.robot_id}')" id="btn-enable-${robot.robot_id}" style="background: #34C759; color: white;">
+                                    启用
+                                </button>
+                            ` : `
+                                <button class="btn-small btn-disable" onclick="disableRobot('${robot.robot_id}')" id="btn-disable-${robot.robot_id}" style="background: #FF9500; color: white;">
+                                    停用
+                                </button>
+                            `}
                             <button class="btn-small btn-delete" onclick="deleteRobot('${robot.robot_id}')" id="btn-delete-${robot.robot_id}">
                                 删除
                             </button>
@@ -1007,9 +1022,16 @@
             }
             
             try {
+                // 设置30秒超时
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 30000);
+                
                 const response = await fetch(`${API_BASE}/api/robots/${robotId}/go-home`, {
-                    method: 'POST'
+                    method: 'POST',
+                    signal: controller.signal
                 });
+                
+                clearTimeout(timeoutId);
                 
                 if (response.ok) {
                     const data = await response.json();
@@ -1017,7 +1039,7 @@
                     // 刷新数据
                     refreshData();
                 } else {
-                    const error = await response.json();
+                    const error = await response.json().catch(() => ({ detail: `HTTP ${response.status}: ${response.statusText}` }));
                     alert(`回桩失败: ${error.detail || '未知错误'}`);
                     if (button) {
                         button.disabled = false;
@@ -1025,10 +1047,90 @@
                     }
                 }
             } catch (error) {
-                alert(`回桩失败: ${error.message}`);
+                if (error.name === 'AbortError') {
+                    alert(`回桩请求超时: 机器人 ${robotId} 未在30秒内响应。请检查机器人连接状态。`);
+                } else {
+                    alert(`回桩失败: ${error.message || '网络错误'}`);
+                }
                 if (button) {
                     button.disabled = false;
                     button.textContent = '回桩';
+                }
+            }
+        }
+        
+        async function disableRobot(robotId) {
+            if (!confirm(`确定要停用机器人 ${robotId} 吗？\n\n停用后，该机器人将无法执行任何调度任务。`)) {
+                return;
+            }
+            
+            const button = document.getElementById(`btn-disable-${robotId}`);
+            if (button) {
+                button.disabled = true;
+                button.textContent = '停用中...';
+            }
+            
+            try {
+                const response = await fetch(`${API_BASE}/api/robots/${robotId}/disable`, {
+                    method: 'POST'
+                });
+                
+                if (response.ok) {
+                    const data = await response.json();
+                    alert(`机器人 ${robotId} 已停用！\n${data.message || ''}`);
+                    // 刷新数据
+                    refreshData();
+                } else {
+                    const error = await response.json();
+                    alert(`停用失败: ${error.detail || '未知错误'}`);
+                    if (button) {
+                        button.disabled = false;
+                        button.textContent = '停用';
+                    }
+                }
+            } catch (error) {
+                alert(`停用失败: ${error.message}`);
+                if (button) {
+                    button.disabled = false;
+                    button.textContent = '停用';
+                }
+            }
+        }
+        
+        async function enableRobot(robotId) {
+            if (!confirm(`确定要启用机器人 ${robotId} 吗？\n\n启用后，该机器人可以正常执行调度任务。`)) {
+                return;
+            }
+            
+            const button = document.getElementById(`btn-enable-${robotId}`);
+            if (button) {
+                button.disabled = true;
+                button.textContent = '启用中...';
+            }
+            
+            try {
+                const response = await fetch(`${API_BASE}/api/robots/${robotId}/enable`, {
+                    method: 'POST'
+                });
+                
+                if (response.ok) {
+                    const data = await response.json();
+                    alert(`机器人 ${robotId} 已启用！\n${data.message || ''}`);
+                    // 刷新数据
+                    refreshData();
+                } else {
+                    const error = await response.json();
+                    alert(`启用失败: ${error.detail || '未知错误'}`);
+                    if (button) {
+                        button.disabled = false;
+                        button.textContent = '启用';
+                    }
+                }
+            } catch (error) {
+                alert(`启用失败: ${error.message}`);
+                if (button) {
+                    button.disabled = false;
+                    button.textContent = '启用';
                 }
             }
         }

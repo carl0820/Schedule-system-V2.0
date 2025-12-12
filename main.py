@@ -58,7 +58,7 @@ app = FastAPI(
     description="多机器人调度系统 - 基于思岚科技底盘REST API"
 )
 
-# 定制OpenAPI schema，移除start_pose字段
+# 定制OpenAPI schema，移除start_pose字段，添加安全定义
 def custom_openapi():
     # 清除缓存，强制重新生成schema
     if hasattr(app, 'openapi_schema'):
@@ -70,6 +70,10 @@ def custom_openapi():
         description=app.description,
         routes=app.routes,
     )
+    
+    # 认证已移除，所有API端点无需授权即可调用
+    # 不再添加安全定义和安全要求
+    
     # 从TaskCreate和MultiActionTaskCreate模型中移除start_pose字段
     if "components" in openapi_schema and "schemas" in openapi_schema["components"]:
         schemas = openapi_schema["components"]["schemas"]
@@ -126,9 +130,9 @@ app.include_router(visualization.router, prefix="/api/visualization", tags=["可
 # HTML页面路由（必须在静态文件挂载之前注册，以确保优先级）
 @app.get("/")
 async def root():
-    """根路径 - 重定向到登录页面（需要认证后才能访问其他页面）"""
+    """根路径 - 重定向到首页"""
     from fastapi.responses import RedirectResponse
-    return RedirectResponse(url="/static/login.html")
+    return RedirectResponse(url="/static/index.html")
 
 
 @app.get("/task_list.html")

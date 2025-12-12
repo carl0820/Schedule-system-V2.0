@@ -577,17 +577,92 @@ class RobotAgent:
     
     async def go_home(self) -> ActionState:
         """回桩"""
-        data = await self._post("/api/multi-floor/motion/v1/gohomeaction", {})
-        return ActionState(**data)
+        try:
+            data = await self._post("/api/multi-floor/motion/v1/gohomeaction", {})
+            # 记录详细的响应信息，特别是Hermes
+            logger.info(f"Robot {self.robot_id} go-home API response: {data}")
+            
+            # 检查响应中是否包含action_id
+            if not data.get("action_id"):
+                logger.warning(f"Robot {self.robot_id} go-home response missing action_id: {data}")
+                # 尝试从state中获取action_id
+                if isinstance(data.get("state"), dict) and "action_id" in data.get("state", {}):
+                    data["action_id"] = data["state"]["action_id"]
+                    logger.info(f"Robot {self.robot_id} extracted action_id from state: {data['action_id']}")
+            
+            # 检查action状态，看是否立即失败
+            if isinstance(data.get("state"), dict):
+                state = data["state"]
+                result_code = state.get("result")
+                status_code = state.get("status")
+                reason = state.get("reason", "")
+                
+                logger.info(
+                    f"Robot {self.robot_id} go-home action state: "
+                    f"result={result_code}, status={status_code}, reason={reason}"
+                )
+                
+                # 如果action立即失败，记录详细信息
+                if result_code == -1:
+                    error_msg = f"回桩失败: {reason}" if reason else "回桩失败: 未知错误"
+                    logger.error(f"Robot {self.robot_id} go-home failed immediately: {error_msg}")
+                    raise Exception(error_msg)
+            
+            return ActionState(**data)
+        except httpx.TimeoutException as e:
+            logger.error(f"Robot {self.robot_id} go-home timeout: {e}")
+            raise Exception(f"回桩请求超时: 机器人 {self.robot_id} 未在 {self.timeout} 秒内响应")
+        except httpx.HTTPStatusError as e:
+            logger.error(f"Robot {self.robot_id} go-home HTTP error: {e.response.status_code} - {e.response.text}")
+            raise Exception(f"回桩请求失败: HTTP {e.response.status_code} - {e.response.text}")
+        except Exception as e:
+            logger.error(f"Robot {self.robot_id} go-home error: {e}", exc_info=True)
+            raise
     
     async def cancel_current_action(self) -> bool:
         """取消当前任务"""
         return await self._delete("/api/core/motion/v1/actions/current")
     
-    async def get_action_status(self, action_id: int) -> ActionState:
-        """查询action的状态"""
-        data = await self._get(f"/api/core/motion/v1/actions/{action_id}")
-        return ActionState(**data)
+    async def get_action_status(self, action_id: int) -> Optional[ActionState]:
+        """
+        查询action的状态
+        
+        使用API: GET /api/core/motion/v1/actions/{action_id}
+        响应格式:
+        {
+            "action_id": 4526,
+            "state": {
+                "reason": "",
+                "result": 0,  # 0:Success, -1:Failed, -2:Aborted
+                "status": 4   # 0:NewBorn, 1:Working, 3:Paused, 4:Done
+            }
+        }
+        
+        Args:
+            action_id: action的ID
+            
+        Returns:
+            ActionState对象，如果action不存在或已清除则返回None
+        """
+        try:
+            # 400和404错误表示action不存在或已清除，这是正常情况（action完成后会被清除）
+            data = await self._get(f"/api/core/motion/v1/actions/{action_id}", silent_errors=[400, 404])
+            # 确保响应数据格式正确（API返回的state字段包含status、result、reason）
+            if data and "state" in data and isinstance(data["state"], dict):
+                # state字段已存在，直接使用
+                logger.debug(f"Robot {self.robot_id} action_id={action_id} status retrieved: state={data.get('state')}")
+            return ActionState(**data)
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 404:
+                # action不存在（可能已完成并被清除）
+                logger.debug(f"Robot {self.robot_id} action_id={action_id} not found (404), action may have been completed")
+                return None
+            elif e.response.status_code == 400:
+                # action无效（可能已完成并被清除）
+                logger.debug(f"Robot {self.robot_id} action_id={action_id} invalid (400), action may have been completed")
+                return None
+            # 其他HTTP错误，抛出异常
+            raise
     
     async def get_current_action(self) -> Optional[ActionState]:
         """查询当前任务状态"""

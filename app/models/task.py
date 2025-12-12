@@ -191,7 +191,7 @@ class Task(BaseModel):
     task_id: str  # 任务ID（必需字段，会在响应中返回）
     robot_id: Optional[str] = None
     status: TaskStatus
-    start_pose: Optional[Pose]
+    start_pose: Optional[Pose] = None
     target_pose: Pose
     priority: TaskPriority
     action_id: Optional[int] = None
@@ -205,6 +205,10 @@ class Task(BaseModel):
     is_multi_action: bool = False  # 是否为多动作任务
     actions: Optional[List[ActionItem]] = None  # 动作序列（多动作任务时使用）
     current_action_index: int = 0  # 当前执行的动作索引（多动作任务时使用）
+    # 任务参数（从TaskCreate传递）
+    acceptable_precision: float = 0.3  # 到达精度（米）
+    speed_ratio: float = 1.0  # 速度比例
+    poi_name: Optional[str] = None  # POI名称（如果使用POI导航）
 
     class Config:
         json_encoders = {
