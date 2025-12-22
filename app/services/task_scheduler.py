@@ -1154,13 +1154,63 @@ class TaskScheduler:
                                         available_robots.append((robot_id, state))
                 
                 # 分配任务（考虑路径碰撞）
+                # 重要：每次循环都重新检查可用机器人，确保第二个任务能找到其他可用机器人
                 for task in pending_tasks:
-                    if not available_robots:
-                        break
+                    # 重新检查可用机器人（因为前面的任务可能已经分配了机器人）
+                    # 只检查空闲且没有活跃任务的机器人
+                    current_available_robots = []
+                    for robot_id in robot_ids:
+                        state = cached_states.get(robot_id)
+                        if not state or state.status != RobotStatus.IDLE:
+                            continue
+                        
+                        # 检查是否有活跃任务
+                        has_active_task = any(
+                            t.robot_id == robot_id and 
+                            (t.status == TaskStatus.EXECUTING or t.status == TaskStatus.ASSIGNED)
+                            for t in self.tasks.values()
+                        )
+                        if has_active_task:
+                            continue
+                        
+                        # 检查是否正在被分配给其他任务（分配锁）
+                        # 注意：这里需要快速检查，不能长时间持有锁
+                        # 使用临时变量避免在锁内执行其他操作
+                        is_locked = False
+                        async with self._assignment_lock:
+                            is_locked = robot_id in self._assignment_locks
+                        if is_locked:
+                            continue
+                        
+                        # 检查电量
+                        battery_percentage = state.power.batteryPercentage if state.power else 0
+                        if battery_percentage < 20:
+                            continue
+                        
+                        # 检查位置
+                        if not state.pose:
+                            continue
+                        if self.path_planner:
+                            is_obstacle = self.path_planner.map_manager.is_obstacle(
+                                state.pose.x, state.pose.y
+                            )
+                            if is_obstacle:
+                                continue
+                        
+                        current_available_robots.append((robot_id, state))
+                    
+                    if not current_available_robots:
+                        logger.warning(
+                            f"No available robots for task {task.task_id} "
+                            f"(total robots: {len(robot_ids)}, "
+                            f"pending tasks: {len(pending_tasks)})"
+                        )
+                        # 不break，继续检查下一个任务（可能其他任务可以分配）
+                        continue
                     
                     # 在计算成本之前，先过滤掉已经有活跃任务的机器人（双重检查，确保不会重复分配）
                     filtered_available_robots = []
-                    for robot_id, state in available_robots:
+                    for robot_id, state in current_available_robots:
                         # 检查该机器人是否已经有活跃任务（ASSIGNED或EXECUTING状态）
                         has_active_task = any(
                             t.robot_id == robot_id and 
@@ -1172,7 +1222,8 @@ class TaskScheduler:
                     
                     if not filtered_available_robots:
                         logger.warning(f"No available robots for task {task.task_id} after filtering active tasks")
-                        break
+                        # 不break，继续检查下一个任务
+                        continue
                     
                     # 选择最优的机器人（考虑路径碰撞）- 并发计算所有机器人的成本
                     async def calculate_robot_cost(robot_id: str, state) -> tuple:
@@ -1255,8 +1306,7 @@ class TaskScheduler:
                             logger.warning(
                                 f"Robot {best_robot_id} already has active task, skipping assignment for task {task.task_id}"
                             )
-                            # 从可用列表中移除该机器人，继续下一个任务
-                            available_robots = [(r, s) for r, s in available_robots if r != best_robot_id]
+                            # 继续下一个任务（不修改available_robots，因为每次循环都重新检查）
                             continue
                         
                         # 使用分配锁机制，防止多个任务同时分配给同一个机器人
@@ -1268,8 +1318,7 @@ class TaskScheduler:
                                     f"Robot {best_robot_id} is being assigned to task {other_task_id}, "
                                     f"skipping assignment for task {task.task_id}"
                                 )
-                                # 从可用列表中移除该机器人，继续下一个任务
-                                available_robots = [(r, s) for r, s in available_robots if r != best_robot_id]
+                                # 继续下一个任务（不修改available_robots，因为每次循环都重新检查）
                                 continue
                             
                             # 标记这个机器人正在被分配给当前任务
@@ -1298,8 +1347,7 @@ class TaskScheduler:
                                 f"(best cost: {best_cost:.2f}m, target: ({task.target_pose.x}, {task.target_pose.y}))"
                             )
                         await self._assign_task_with_lock(task, best_robot_id)
-                        # 从可用列表中移除（立即移除，防止下一个任务重复分配）
-                        available_robots = [(r, s) for r, s in available_robots if r != best_robot_id]
+                        # 任务已分配，继续下一个任务（不需要修改available_robots，因为每次循环都重新检查）
                     else:
                         logger.warning(
                             f"No available robot found for task {task.task_id} "
