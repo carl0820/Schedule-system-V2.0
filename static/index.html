@@ -1153,10 +1153,16 @@
             if (!data) return null;
             const robotsHash = JSON.stringify(data.robots || []).length;
             const tasksHash = JSON.stringify(data.tasks || []).length;
+            // 包含虚拟墙和限行区域，确保它们变化时hash值会变化
+            const virtualWallsHash = JSON.stringify(data.virtual_walls || []).length;
+            // 使用完整的限行区域数据计算哈希，确保内容变化时能检测到
+            const restrictedAreasHash = JSON.stringify(data.restricted_areas || []).replace(/\s/g, '');
+            // 包含等待点配置，确保等待点配置变化时hash值会变化
+            const waitingPointsHash = JSON.stringify(data.waiting_points || []).replace(/\s/g, '');
             // 包含地图ID，确保地图切换时hash值会变化
             const mapId = data.map && data.map.info ? (data.map.info.map_id || '') : '';
             const mapHash = data.map ? (data.map.info ? JSON.stringify(data.map.info).length : 0) : 0;
-            return `${robotsHash}-${tasksHash}-${mapHash}-${mapId}`;
+            return `${robotsHash}-${tasksHash}-${virtualWallsHash}-${restrictedAreasHash}-${waitingPointsHash}-${mapHash}-${mapId}`;
         }
         
         // 监听地图变化事件（从地图管理页面）
@@ -1263,6 +1269,30 @@
                 if (data.virtual_walls === undefined) {
                     console.warn('virtual_walls field missing in response, setting to empty array');
                     data.virtual_walls = [];
+                }
+                
+                // 确保 restricted_areas 字段存在（如果后端没有返回，设置为空数组）
+                if (data.restricted_areas === undefined) {
+                    console.warn('[RESTRICTED AREA] restricted_areas field missing in response, setting to empty array');
+                    data.restricted_areas = [];
+                } else {
+                    console.log(`[RESTRICTED AREA] Received ${data.restricted_areas.length} restricted areas from API:`, data.restricted_areas);
+                }
+                
+                // 检查POI数据
+                if (data.pois === undefined) {
+                    console.warn('[POI] pois field missing in response, setting to empty array');
+                    data.pois = [];
+                } else {
+                    console.log(`[POI] Received ${data.pois.length} POIs from API:`, data.pois);
+                }
+                
+                // 检查等待点配置
+                if (data.waiting_points === undefined) {
+                    console.warn('[WAITING POINTS] waiting_points field missing in response, setting to empty array');
+                    data.waiting_points = [];
+                } else {
+                    console.log(`[WAITING POINTS] Received ${data.waiting_points.length} waiting points from API:`, data.waiting_points);
                 }
                 
                 // 调试日志：检查虚拟墙数据（仅在首次加载或数据变化时输出）
@@ -1898,6 +1928,94 @@
                 });
             }
             
+            // 绘制限行区域
+            if (mapData.restricted_areas && mapData.restricted_areas.length > 0) {
+                console.log(`[RESTRICTED AREA] Drawing ${mapData.restricted_areas.length} restricted areas`);
+                
+                mapData.restricted_areas.forEach((area, index) => {
+                    console.log(`[RESTRICTED AREA] Processing area ${index + 1}:`, {
+                        id: area.id,
+                        hasArea: !!area.area,
+                        areaKeys: area.area ? Object.keys(area.area) : [],
+                        areaValue: area.area
+                    });
+                    if (area.area && area.area.start && area.area.end) {
+                        const start = area.area.start;
+                        const end = area.area.end;
+                        const halfWidth = area.area.half_width || 0.5;
+                        
+                        // 计算起点和终点的地图坐标
+                        const startMapX = Math.floor((start.x - mapInfo.origin_x) / mapInfo.resolution);
+                        const startMapY = Math.floor((start.y - mapInfo.origin_y) / mapInfo.resolution);
+                        const endMapX = Math.floor((end.x - mapInfo.origin_x) / mapInfo.resolution);
+                        const endMapY = Math.floor((end.y - mapInfo.origin_y) / mapInfo.resolution);
+                        
+                        // 计算限行区域的宽度（像素）
+                        const widthPixels = Math.floor((halfWidth * 2) / mapInfo.resolution);
+                        
+                        // 计算线段的方向向量
+                        const dx = endMapX - startMapX;
+                        const dy = endMapY - startMapY;
+                        const length = Math.sqrt(dx * dx + dy * dy);
+                        
+                        if (length > 0) {
+                            // 计算垂直于线段的方向（用于绘制宽度）
+                            const perpX = -dy / length;
+                            const perpY = dx / length;
+                            
+                            // 计算四个角点（形成矩形区域）
+                            const halfWidthPixels = widthPixels / 2;
+                            const p1x = startMapX + perpX * halfWidthPixels;
+                            const p1y = startMapY + perpY * halfWidthPixels;
+                            const p2x = startMapX - perpX * halfWidthPixels;
+                            const p2y = startMapY - perpY * halfWidthPixels;
+                            const p3x = endMapX - perpX * halfWidthPixels;
+                            const p3y = endMapY - perpY * halfWidthPixels;
+                            const p4x = endMapX + perpX * halfWidthPixels;
+                            const p4y = endMapY + perpY * halfWidthPixels;
+                            
+                            // 转换为画布坐标
+                            const x1 = offsetX + p1x * scale;
+                            const y1 = offsetY + p1y * scale;
+                            const x2 = offsetX + p2x * scale;
+                            const y2 = offsetY + p2y * scale;
+                            const x3 = offsetX + p3x * scale;
+                            const y3 = offsetY + p3y * scale;
+                            const x4 = offsetX + p4x * scale;
+                            const y4 = offsetY + p4y * scale;
+                            
+                            // 绘制限行区域（半透明红色填充，红色边框）
+                            ctx.fillStyle = 'rgba(255, 0, 0, 0.3)'; // 半透明红色
+                            ctx.strokeStyle = '#f44336'; // 红色边框
+                            ctx.lineWidth = 2;
+                            ctx.setLineDash([]); // 实线
+                            
+                            ctx.beginPath();
+                            ctx.moveTo(x1, y1);
+                            ctx.lineTo(x2, y2);
+                            ctx.lineTo(x3, y3);
+                            ctx.lineTo(x4, y4);
+                            ctx.closePath();
+                            ctx.fill();
+                            ctx.stroke();
+                            
+                            // 输出每个限行区域的详细信息
+                            console.log(`[RESTRICTED AREA] Drawing area ${index + 1} (ID: ${area.id}): start=(${start.x.toFixed(2)}, ${start.y.toFixed(2)}), end=(${end.x.toFixed(2)}, ${end.y.toFixed(2)}), width=${(halfWidth * 2).toFixed(2)}m`);
+                        }
+                    } else {
+                        console.warn(`Restricted area ${index + 1} missing area data:`, area);
+                    }
+                });
+            } else {
+                console.log('[RESTRICTED AREA] No restricted areas to draw', {
+                    hasRestrictedAreas: !!mapData.restricted_areas,
+                    restrictedAreasType: typeof mapData.restricted_areas,
+                    restrictedAreasLength: mapData.restricted_areas ? mapData.restricted_areas.length : 'N/A',
+                    mapDataKeys: Object.keys(mapData || {}),
+                    restrictedAreasValue: mapData.restricted_areas
+                });
+            }
+            
             // 绘制任务路径
             if (mapData.tasks) {
                 mapData.tasks.forEach(task => {
@@ -2095,7 +2213,12 @@
             }
             
             // 绘制POI点
-            if (mapData.pois) {
+            if (mapData.pois && Array.isArray(mapData.pois) && mapData.pois.length > 0) {
+                // 获取等待点列表（用于区分颜色）
+                const waitingPoints = mapData.waiting_points || [];
+                console.log(`[POI] Drawing ${mapData.pois.length} POIs on map`);
+                console.log(`[WAITING POINTS] Waiting points config:`, waitingPoints);
+                
                 mapData.pois.forEach(poi => {
                     if (poi.pose) {
                         const mapX = Math.floor((poi.pose.x - mapInfo.origin_x) / mapInfo.resolution);
@@ -2103,17 +2226,43 @@
                         const x = offsetX + mapX * scale;
                         const y = offsetY + mapY * scale;
                         
+                        // 检查是否是等待点（支持display_name和id匹配）
+                        const poiName = poi.display_name || poi.id;
+                        const poiId = poi.id;
+                        const isWaitingPoint = waitingPoints.includes(poiName) || waitingPoints.includes(poiId);
+                        
+                        if (isWaitingPoint) {
+                            console.log(`[WAITING POINTS] POI "${poiName}" (ID: ${poiId}) is a waiting point, using orange color`);
+                        }
+                        
+                        // 根据是否是等待点选择颜色
+                        let poiColor = '#9b59b6'; // 默认紫色
+                        let poiSize = 4;
+                        if (isWaitingPoint) {
+                            poiColor = '#ff9800'; // 橙色（等待点）
+                            poiSize = 6; // 等待点稍微大一点，更醒目
+                        }
+                        
                         // 绘制POI圆形
-                        ctx.fillStyle = '#9b59b6';
+                        ctx.fillStyle = poiColor;
                         ctx.beginPath();
-                        ctx.arc(x, y, 4 * scale, 0, Math.PI * 2);
+                        ctx.arc(x, y, poiSize * scale, 0, Math.PI * 2);
                         ctx.fill();
                         
+                        // 如果是等待点，添加外圈高亮
+                        if (isWaitingPoint) {
+                            ctx.strokeStyle = poiColor;
+                            ctx.lineWidth = 2;
+                            ctx.beginPath();
+                            ctx.arc(x, y, (poiSize + 2) * scale, 0, Math.PI * 2);
+                            ctx.stroke();
+                        }
+                        
                         // 绘制POI标签
-                        ctx.fillStyle = '#9b59b6';
+                        ctx.fillStyle = poiColor;
                         ctx.font = `${10 * scale}px Arial`;
                         ctx.textAlign = 'center';
-                        ctx.fillText(poi.display_name || poi.id.substring(0, 6), x, y - 8 * scale);
+                        ctx.fillText(poi.display_name || poi.id.substring(0, 6), x, y - (8 + (isWaitingPoint ? 2 : 0)) * scale);
                     }
                 });
             }

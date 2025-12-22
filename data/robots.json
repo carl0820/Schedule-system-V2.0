@@ -1,24 +1,22 @@
 {
   "robots": [
     {
-      "robot_id": "p3_1",
-      "base_url": "http://10.160.129.23:1448"
+      "robot_id": "Phoebus",
+      "base_url": "http://10.160.129.145:1448"
+    },
+    {
+      "robot_id": "P3",
+      "base_url": "http://10.160.129.149:1448"
     },
     {
       "robot_id": "Hermes",
       "base_url": "http://10.160.129.5:1448"
-    },
-    {
-      "robot_id": "phoebus",
-      "base_url": "http://10.160.129.145:1448"
-    },
-    {
-      "robot_id": "Athena2.0",
-      "base_url": "http://10.160.129.56:1448"
     }
   ],
   "disabled_robots": [
+    "phoebus",
+    "Phoebus",
     "p3_1"
   ],
-  "last_updated": "2025-12-10T10:15:55.757736"
+  "last_updated": "2025-12-22T13:29:43.703076"
 }

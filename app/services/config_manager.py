@@ -91,6 +91,10 @@ class ConfigManager:
                 # ========== 预定义等待点 ==========
                 "predefined_waiting_points": [],  # 预定义等待点列表 [{"x": float, "y": float, "z": float, "yaw": float, "name": str}]
                 "use_predefined_waiting_points": True,  # 是否优先使用预定义等待点
+                
+                # ========== POI等待点配置 ==========
+                "poi_waiting_points": [],  # POI等待点名称列表（从机器人POI中选择，例如：["等待点1", "等待点2"]）
+                "use_poi_waiting_points": True,  # 是否优先使用POI等待点
 
                 # ========== 区域锁（针对思岚底盘的通道管理） ==========
                 "area_lock_enabled": True,  # 是否启用区域锁
@@ -141,10 +145,17 @@ class ConfigManager:
                         value = float(value)
                     elif isinstance(default_config[key], int):
                         value = int(value)
+                    elif isinstance(default_config[key], bool):
+                        value = bool(value)
+                    elif isinstance(default_config[key], list):
+                        # 列表类型（如 poi_waiting_points），直接使用
+                        if not isinstance(value, list):
+                            raise ValueError(f"{key} must be a list")
+                        value = value
                     
                     # 范围检查
                     if key.endswith("_threshold") or key.endswith("_distance") or key.endswith("_time_window"):
-                        if value <= 0:
+                        if isinstance(value, (int, float)) and value <= 0:
                             raise ValueError(f"{key} must be positive")
                     
                     if key == "backoff_speed_ratio":

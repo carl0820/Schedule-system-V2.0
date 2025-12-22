@@ -389,6 +389,29 @@ class AvoidanceStrategy:
                 if not robot_state:
                     return False
                 
+                # 检查机器人是否已经在充电桩附近（距离原点<1米），如果是就不应该发送避让指令
+                distance_to_origin = math.sqrt(robot_state.pose.x * robot_state.pose.x + robot_state.pose.y * robot_state.pose.y)
+                if distance_to_origin < 1.0:  # 距离原点小于1米，认为在充电桩
+                    logger.info(
+                        f"Robot {robot_id} is at charging dock (distance to origin: {distance_to_origin:.2f}m), "
+                        f"skipping avoidance to avoid moving robot away from dock"
+                    )
+                    return False
+                
+                # 检查机器人是否正在回桩（有go_home action），如果有就跳过避让
+                try:
+                    current_action = await agent.get_current_action()
+                    if current_action and current_action.action_id:
+                        # 检查是否是回桩action（通过action_name判断）
+                        if current_action.action_name and "BackHome" in current_action.action_name:
+                            logger.info(
+                                f"Robot {robot_id} is returning to charging dock (action_id={current_action.action_id}), "
+                                f"skipping avoidance to avoid interrupting go_home action"
+                            )
+                            return False
+                except Exception as e:
+                    logger.debug(f"Failed to get current action for robot {robot_id}: {e}")
+                
                 # 如果有后退距离，执行后退
                 if "back_distance" in params:
                     back_distance = params.get("back_distance", 0.5)

@@ -45,7 +45,7 @@ if not deadlock_logger.handlers:
 
 class DeadlockState:
     """死锁状态"""
-
+    
     def __init__(
         self,
         robot_ids: List[str],
@@ -72,7 +72,8 @@ class DeadlockDetector:
         robot_manager: RobotManager,
         collision_detector: CollisionDetector,
         path_planner: Optional[PathPlanner] = None,
-        task_scheduler: Optional[Any] = None  # 任务调度器引用，用于获取任务优先级
+        task_scheduler: Optional[Any] = None,  # 任务调度器引用，用于获取任务优先级
+        restricted_area_traffic_manager: Optional[Any] = None  # 限行区域通行管理器（可选）
     ):
         """
         初始化死锁检测器
@@ -82,11 +83,13 @@ class DeadlockDetector:
             collision_detector: 碰撞检测器
             path_planner: 路径规划器（可选，用于窄道检测）
             task_scheduler: 任务调度器（可选，用于获取任务优先级）
+            restricted_area_traffic_manager: 限行区域通行管理器（可选，用于限行区域死锁检测和解决）
         """
         self.robot_manager = robot_manager
         self.collision_detector = collision_detector
         self.path_planner = path_planner
         self.task_scheduler = task_scheduler  # 任务调度器引用
+        self.restricted_area_traffic_manager = restricted_area_traffic_manager  # 限行区域通行管理器引用
         self.robot_states_history: Dict[str, List[Tuple[datetime, Pose]]] = {}  # 机器人状态历史
         self.deadlock_history: List[DeadlockState] = []  # 死锁历史
         
@@ -609,20 +612,20 @@ class DeadlockDetector:
                             else:
                                 vx2 = speed2.vx * math.cos(pose2.yaw)
                                 vy2 = speed2.vx * math.sin(pose2.yaw)
-                            
-                            # 计算相对速度
-                            rel_vx = vx2 - vx1
-                            rel_vy = vy2 - vy1
-                            
-                            # 计算相对位置
-                            rel_x = pose2.x - pose1.x
-                            rel_y = pose2.y - pose1.y
-                            
-                            # 如果相对速度方向与相对位置方向相反，或者两个机器人都静止且距离很近，可能相互阻塞
-                            dot_product = rel_vx * rel_x + rel_vy * rel_y
-                            if dot_product < 0 or (speed1.vx == 0 and speed1.vy == 0 and speed2.vx == 0 and speed2.vy == 0):
-                                group.append(robot_id2)
-                                processed.add(robot_id2)
+                        
+                        # 计算相对速度
+                        rel_vx = vx2 - vx1
+                        rel_vy = vy2 - vy1
+                        
+                        # 计算相对位置
+                        rel_x = pose2.x - pose1.x
+                        rel_y = pose2.y - pose1.y
+                        
+                        # 如果相对速度方向与相对位置方向相反，或者两个机器人都静止且距离很近，可能相互阻塞
+                        dot_product = rel_vx * rel_x + rel_vy * rel_y
+                        if dot_product < 0 or (speed1.vx == 0 and speed1.vy == 0 and speed2.vx == 0 and speed2.vy == 0):
+                            group.append(robot_id2)
+                            processed.add(robot_id2)
                         elif not has_task1 and not has_task2:
                             # 两个机器人都没有任务，但如果它们距离很近且都静止，可能形成死锁
                             if both_stuck and distance < 1.5:
@@ -704,7 +707,7 @@ class DeadlockDetector:
     
     async def detect_narrow_passage_deadlock(self, robot_ids: List[str]) -> Optional[List[str]]:
         """
-        检测窄道死锁（支持多台机器人）
+        检测窄道死锁（支持多台机器人，包括限行区域死锁）
         
         Args:
             robot_ids: 机器人ID列表
@@ -712,6 +715,25 @@ class DeadlockDetector:
         Returns:
             死锁的机器人ID列表，如果没有则返回None
         """
+        # 如果限行区域通行管理器可用，先检查限行区域死锁
+        if self.restricted_area_traffic_manager:
+            try:
+                # 检查是否有机器人在限行区域等待队列中
+                waiting_robots = []
+                for robot_id in robot_ids:
+                    if robot_id in self.restricted_area_traffic_manager.robot_waiting_status:
+                        waiting_robots.append(robot_id)
+                
+                # 如果有多台机器人在等待限行区域通行，可能是限行区域死锁
+                if len(waiting_robots) >= 2:
+                    deadlock_logger.info(
+                        f"[RESTRICTED AREA DEADLOCK] Detected {len(waiting_robots)} robots waiting for restricted area access: {waiting_robots}"
+                    )
+                    # 返回等待的机器人列表（这些机器人可能需要协调通行）
+                    return waiting_robots
+            except Exception as e:
+                logger.warning(f"Failed to check restricted area deadlock: {e}")
+        
         if len(robot_ids) < 2 or not self.path_planner:
             return None
         
@@ -891,10 +913,10 @@ class DeadlockDetector:
             if not robot_ids:
                 return deadlocks
             
-            # 注意：即使只有1个机器人，也需要检测卡住情况（虽然不是死锁，但需要处理）
-            # 但死锁检测（循环等待、相互阻塞等）需要至少2个机器人
-            
-            # 更新机器人状态历史（所有机器人，包括单个机器人）
+        # 注意：即使只有1个机器人，也需要检测卡住情况（虽然不是死锁，但需要处理）
+        # 但死锁检测（循环等待、相互阻塞等）需要至少2个机器人
+        
+        # 更新机器人状态历史（所有机器人，包括单个机器人）
             # 同时保存当前状态，用于后续检测
             # 排除停用、离线、有故障的机器人
             robot_states = {}
@@ -950,150 +972,126 @@ class DeadlockDetector:
                                 robot_states[robot_id] = state
                         except Exception:
                             pass
-                
-                if stuck_robots:
-                    # 检查是否已经记录了死锁
-                    existing_deadlock = None
-                    for deadlock in self.deadlock_history:
-                        if (deadlock.deadlock_type == "resource_contention" and
-                            set(deadlock.robot_ids) == set(stuck_robots)):
-                            existing_deadlock = deadlock
-                            break
-                    
-                    if existing_deadlock:
-                        # 更新持续时间
-                        existing_deadlock.duration = (datetime.now() - existing_deadlock.start_time).total_seconds()
-                    else:
-                        # 创建新的死锁记录，立即计算初始 duration（即使很小，也要有一个初始值）
-                        start_time = datetime.now()
-                        deadlock = DeadlockState(
-                            robot_ids=stuck_robots,
-                            deadlock_type="resource_contention",
-                            start_time=start_time,
-                            duration=0.0  # 初始为0，但会在下一轮检测时更新
-                        )
-                        self.deadlock_history.append(deadlock)
-                        deadlocks.append(deadlock)
-                        deadlock_logger.warning(f"[DETECT] Single robot stuck detected: {stuck_robots}")
-                        logger.warning(f"Single robot stuck detected: {stuck_robots}")
-                
-                # 在返回前，更新所有死锁记录的 duration（确保新创建的死锁也有正确的 duration）
-                now = datetime.now()
-                for deadlock in deadlocks:
-                    if deadlock.duration == 0.0:
-                        # 如果是新创建的死锁（duration=0），计算初始 duration
-                        deadlock.duration = (now - deadlock.start_time).total_seconds()
-                    else:
-                        # 如果是已存在的死锁，更新 duration
-                        deadlock.duration = (now - deadlock.start_time).total_seconds()
-                
-                # 清理过期的死锁记录（在更新 duration 之后）
-                self._load_config()
-                self.deadlock_history = [
-                    d for d in self.deadlock_history
-                    if (now - d.start_time).total_seconds() < self.history_retention_time
-                ]
-                
-                return deadlocks
             
-            # 多个机器人：检测各种死锁类型
+            if stuck_robots:
+                # 检查是否已经记录了死锁
+                existing_deadlock = None
+                for deadlock in self.deadlock_history:
+                    if (deadlock.deadlock_type == "resource_contention" and
+                        set(deadlock.robot_ids) == set(stuck_robots)):
+                        existing_deadlock = deadlock
+                        break
+                
+                if existing_deadlock:
+                    # 更新持续时间
+                    existing_deadlock.duration = (datetime.now() - existing_deadlock.start_time).total_seconds()
+                else:
+                    # 创建新的死锁记录，立即计算初始 duration（即使很小，也要有一个初始值）
+                    start_time = datetime.now()
+                    deadlock = DeadlockState(
+                        robot_ids=stuck_robots,
+                        deadlock_type="resource_contention",
+                        start_time=start_time,
+                        duration=0.0  # 初始为0，但会在下一轮检测时更新
+                    )
+                    self.deadlock_history.append(deadlock)
+                    deadlocks.append(deadlock)
+                    deadlock_logger.warning(f"[DETECT] Single robot stuck detected: {stuck_robots}")
+                    logger.warning(f"Single robot stuck detected: {stuck_robots}")
+            
+            # 在返回前，更新所有死锁记录的 duration（确保新创建的死锁也有正确的 duration）
+            now = datetime.now()
+            for deadlock in deadlocks:
+                if deadlock.duration == 0.0:
+                    # 如果是新创建的死锁（duration=0），计算初始 duration
+                    deadlock.duration = (now - deadlock.start_time).total_seconds()
+                else:
+                    # 如果是已存在的死锁，更新 duration
+                    deadlock.duration = (now - deadlock.start_time).total_seconds()
+            
+            # 清理过期的死锁记录（在更新 duration 之后）
+            self._load_config()
+            self.deadlock_history = [
+                d for d in self.deadlock_history
+                if (now - d.start_time).total_seconds() < self.history_retention_time
+            ]
+            
+            return deadlocks
+        
+            # 多个机器人：只检测限行区域死锁
             # 记录检测开始（用于验证）- 使用INFO级别
             deadlock_logger.info(
-                f"[DETECT] Starting deadlock detection for {len(robot_ids)} robots: {robot_ids}"
+                f"[DETECT] Starting restricted area deadlock detection for {len(robot_ids)} robots: {robot_ids}"
             )
-            
-            # 检测循环等待
-            circular_wait = await self.detect_circular_wait(robot_ids)
-            if circular_wait:
-                deadlock_logger.info(f"[DETECT] Circular wait detected: robots {circular_wait}")
-                # 检查是否已经记录了死锁
-                existing_deadlock = None
-                for deadlock in self.deadlock_history:
-                    if (deadlock.deadlock_type == "circular_wait" and
-                        set(deadlock.robot_ids) == set(circular_wait)):
-                        existing_deadlock = deadlock
-                        break
-                
-                if existing_deadlock:
-                    # 更新持续时间
-                    existing_deadlock.duration = (datetime.now() - existing_deadlock.start_time).total_seconds()
-                else:
-                    # 创建新的死锁记录，立即计算初始 duration（即使很小，也要有一个初始值）
-                    start_time = datetime.now()
-                    deadlock = DeadlockState(
-                        robot_ids=circular_wait,
-                        deadlock_type="circular_wait",
-                        start_time=start_time,
-                        duration=0.0  # 初始为0，但会在下一轮检测时更新
-                    )
-                    self.deadlock_history.append(deadlock)
-                    deadlocks.append(deadlock)
-                logger.warning(f"Circular wait deadlock detected: {circular_wait}")
-                deadlock_logger.warning(
-                    f"[CIRCULAR_WAIT] Detected for robots: {', '.join(circular_wait)}"
-                )
         
-            # 检测窄道死锁（包括十字路口和长走廊场景）
-            narrow_passage_deadlock = await self.detect_narrow_passage_deadlock(robot_ids)
-            if narrow_passage_deadlock:
-                deadlock_logger.info(f"[DETECT] Narrow passage deadlock detected: robots {narrow_passage_deadlock}")
-                # 检查是否已经记录了死锁
-                existing_deadlock = None
-                for deadlock in self.deadlock_history:
-                    if (deadlock.deadlock_type == "narrow_passage" and
-                        set(deadlock.robot_ids) == set(narrow_passage_deadlock)):
-                        existing_deadlock = deadlock
-                        break
-                
-                if existing_deadlock:
-                    # 更新持续时间
-                    existing_deadlock.duration = (datetime.now() - existing_deadlock.start_time).total_seconds()
-                else:
-                    # 创建新的死锁记录，立即计算初始 duration（即使很小，也要有一个初始值）
-                    start_time = datetime.now()
-                    deadlock = DeadlockState(
-                        robot_ids=narrow_passage_deadlock,
-                        deadlock_type="narrow_passage",
-                        start_time=start_time,
-                        duration=0.0  # 初始为0，但会在下一轮检测时更新
-                    )
-                    self.deadlock_history.append(deadlock)
-                    deadlocks.append(deadlock)
-                    logger.warning(f"Narrow passage deadlock detected: {narrow_passage_deadlock}")
-                    deadlock_logger.warning(
-                        f"[NARROW_PASSAGE] Detected for robots: {', '.join(narrow_passage_deadlock)}"
-                    )
+            # 只检测限行区域死锁（通过限行区域通行管理器）
+            if self.restricted_area_traffic_manager:
+                # 检查限行区域的容量超限情况（这已经在monitor_robots中处理，但这里也检查以确保及时检测）
+                restricted_areas = self.restricted_area_traffic_manager.map_manager.restricted_areas
+                for area in restricted_areas:
+                    area_id = area.get("id")
+                    area_data = area.get("area", {})
+                    
+                    if not area_data:
+                        continue
+                    
+                    start = area_data.get("start", {})
+                    end = area_data.get("end", {})
+                    half_width = area_data.get("half_width", 0.5)
+                    
+                    if not start or not end:
+                        continue
+                    
+                    capacity = self.restricted_area_traffic_manager.calculate_capacity(half_width)
+                    
+                    # 检查限行区域通行状态
+                    if area_id in self.restricted_area_traffic_manager.area_traffic:
+                        traffic = self.restricted_area_traffic_manager.area_traffic[area_id]
+                        current_count = len(traffic['robots'])
+                        
+                        # 如果容量超限，认为存在死锁
+                        if current_count > capacity:
+                            deadlock_robots = traffic['robots'].copy()
+                            deadlock_logger.info(
+                                f"[DETECT] Restricted area {area_id} capacity overflow: "
+                                f"{current_count}/{capacity} robots: {deadlock_robots}"
+                            )
+                            
+            # 检查是否已经记录了死锁
+            existing_deadlock = None
+            for deadlock in self.deadlock_history:
+                                if (deadlock.deadlock_type == "restricted_area" and
+                                    set(deadlock.robot_ids) == set(deadlock_robots)):
+                                    existing_deadlock = deadlock
+                                    break
             
-            # 检测相互阻塞
-            mutual_blocking = await self.detect_mutual_blocking(robot_ids)
-            if mutual_blocking:
-                deadlock_logger.info(f"[DETECT] Mutual blocking detected: robots {mutual_blocking}")
-                # 检查是否已经记录了死锁
-                existing_deadlock = None
-                for deadlock in self.deadlock_history:
-                    if (deadlock.deadlock_type == "mutual_blocking" and
-                        set(deadlock.robot_ids) == set(mutual_blocking)):
-                        existing_deadlock = deadlock
-                        break
-                
-                if existing_deadlock:
-                    # 更新持续时间
-                    existing_deadlock.duration = (datetime.now() - existing_deadlock.start_time).total_seconds()
-                else:
-                    # 创建新的死锁记录，立即计算初始 duration（即使很小，也要有一个初始值）
-                    start_time = datetime.now()
-                    deadlock = DeadlockState(
-                        robot_ids=mutual_blocking,
-                        deadlock_type="mutual_blocking",
-                        start_time=start_time,
-                        duration=0.0  # 初始为0，但会在下一轮检测时更新
-                    )
-                    self.deadlock_history.append(deadlock)
-                    deadlocks.append(deadlock)
-                    logger.warning(f"Mutual blocking deadlock detected: {mutual_blocking}")
-                    deadlock_logger.warning(
-                        f"[MUTUAL_BLOCKING] Detected for robots: {', '.join(mutual_blocking)}"
-                    )
+            if existing_deadlock:
+                # 更新持续时间
+                existing_deadlock.duration = (datetime.now() - existing_deadlock.start_time).total_seconds()
+            else:
+                # 创建新的死锁记录
+                                start_time = datetime.now()
+                                deadlock = DeadlockState(
+                                    robot_ids=deadlock_robots,
+                                    deadlock_type="restricted_area",
+                                    start_time=start_time,
+                                    duration=0.0,
+                                    additional_info={"area_id": area_id, "capacity": capacity, "current_count": current_count}
+                                )
+                                self.deadlock_history.append(deadlock)
+                                deadlocks.append(deadlock)
+                                logger.warning(
+                                    f"Restricted area deadlock detected in area {area_id}: "
+                                    f"{deadlock_robots} (capacity: {capacity}, current: {current_count})"
+                                )
+                                deadlock_logger.warning(
+                                    f"[RESTRICTED_AREA] Deadlock detected in area {area_id}: "
+                                    f"{', '.join(deadlock_robots)} (capacity: {capacity}, current: {current_count})"
+                                )
+        
+            # 不再检测其他类型的死锁（循环等待、窄道、相互阻塞等）
+            # 这些死锁应该通过限行区域和等待点机制来解决
+            # 注意：mutual_blocking检测已移除，因为只通过限行区域和等待点机制解决死锁
             
             # 检测活锁（机器人不断移动但无法前进）
             livelock_robots = await self.detect_livelock(robot_ids)
@@ -1163,47 +1161,47 @@ class DeadlockDetector:
             
             # 额外检测：如果多个机器人距离很近且都静止，即使没有任务，也可能形成死锁
             if len(stuck_robots) < 2 and len(robot_states) >= 2:
-                # 检查是否有多个机器人距离很近且都静止
-                robot_list = list(robot_states.keys())
-                deadlock_logger.debug(
-                    f"[DETECT] Checking {len(robot_list)} robots for close stuck pairs "
-                    f"(current stuck: {len(stuck_robots)})"
-                )
-                for i, robot_id1 in enumerate(robot_list):
-                    if robot_id1 in stuck_robots:
-                        continue
-                    state1 = robot_states[robot_id1]
-                    speed1 = state1.speed
-                    # 如果机器人静止
-                    if speed1.vx == 0 and speed1.vy == 0:
-                        for robot_id2 in robot_list[i+1:]:
-                            if robot_id2 in stuck_robots:
-                                continue
-                            state2 = robot_states[robot_id2]
-                            speed2 = state2.speed
-                            # 如果另一个机器人也静止
-                            if speed2.vx == 0 and speed2.vy == 0:
-                                try:
-                                    # 计算距离（在条件判断之前计算，避免作用域问题）
-                                    distance = self.calculate_distance(state1.pose, state2.pose)
-                                    
-                                    # 如果距离很近（小于6米），可能相互阻塞（增加检测范围）
-                                    if distance < 6.0:
-                                        # 检查机器人是否有任务（用于日志和判断）
-                                        has_task1 = False
-                                        has_task2 = False
-                                        task1_id = None
-                                        task2_id = None
-                                        if self.task_scheduler:
-                                            for task in self.task_scheduler.tasks.values():
-                                                if task.robot_id == robot_id1 and task.status in [TaskStatus.EXECUTING, TaskStatus.ASSIGNED]:
-                                                    has_task1 = True
-                                                    task1_id = task.task_id[:8]
-                                                if task.robot_id == robot_id2 and task.status in [TaskStatus.EXECUTING, TaskStatus.ASSIGNED]:
-                                                    has_task2 = True
-                                                    task2_id = task.task_id[:8]
+                    # 检查是否有多个机器人距离很近且都静止
+                    robot_list = list(robot_states.keys())
+                    deadlock_logger.debug(
+                        f"[DETECT] Checking {len(robot_list)} robots for close stuck pairs "
+                        f"(current stuck: {len(stuck_robots)})"
+                    )
+                    for i, robot_id1 in enumerate(robot_list):
+                        if robot_id1 in stuck_robots:
+                            continue
+                        state1 = robot_states[robot_id1]
+                        speed1 = state1.speed
+                        # 如果机器人静止
+                        if speed1.vx == 0 and speed1.vy == 0:
+                            for robot_id2 in robot_list[i+1:]:
+                                if robot_id2 in stuck_robots:
+                                    continue
+                                state2 = robot_states[robot_id2]
+                                speed2 = state2.speed
+                                # 如果另一个机器人也静止
+                                if speed2.vx == 0 and speed2.vy == 0:
+                                    try:
+                                        # 计算距离（在条件判断之前计算，避免作用域问题）
+                                        distance = self.calculate_distance(state1.pose, state2.pose)
                                         
-                                        # 判断是否为死锁：
+                                        # 如果距离很近（小于6米），可能相互阻塞（增加检测范围）
+                                        if distance < 6.0:
+                                            # 检查机器人是否有任务（用于日志和判断）
+                                            has_task1 = False
+                                            has_task2 = False
+                                            task1_id = None
+                                            task2_id = None
+                                            if self.task_scheduler:
+                                                for task in self.task_scheduler.tasks.values():
+                                                    if task.robot_id == robot_id1 and task.status in [TaskStatus.EXECUTING, TaskStatus.ASSIGNED]:
+                                                        has_task1 = True
+                                                        task1_id = task.task_id[:8]
+                                                    if task.robot_id == robot_id2 and task.status in [TaskStatus.EXECUTING, TaskStatus.ASSIGNED]:
+                                                        has_task2 = True
+                                                        task2_id = task.task_id[:8]
+                                            
+                                            # 判断是否为死锁：
                                         # 1. 两个机器人都有任务且都静止（距离<6米）
                                         # 2. 或者距离非常近（<2米）且都静止
                                         # 3. 或者至少一个机器人有任务，另一个机器人（即使没有任务）在很近的距离（<2.5米）且都静止（阻塞情况）
@@ -1303,13 +1301,13 @@ class DeadlockDetector:
                                                 f"has_task={has_task2}, task_id={task2_id}, speed=({speed2.vx:.2f}, {speed2.vy:.2f})) "
                                                 f"at distance {distance:.2f}m"
                                             )
-                                except Exception as e:
-                                    # 如果计算距离时出错，记录错误但继续处理
-                                    deadlock_logger.warning(
-                                        f"[DETECT] Error calculating distance between {robot_id1} and {robot_id2}: {e}"
-                                    )
-                                    continue  # 跳过这个机器人对，继续处理下一个
-            
+                                    except Exception as e:
+                                        # 如果计算距离时出错，记录错误但继续处理
+                                        deadlock_logger.warning(
+                                            f"[DETECT] Error calculating distance between {robot_id1} and {robot_id2}: {e}"
+                                        )
+                                        continue  # 跳过这个机器人对，继续处理下一个
+        
             if stuck_robots:
                 # 如果有多个机器人卡住，使用 mutual_blocking 类型（更合适）
                 # 如果只有一个机器人卡住，使用 resource_contention 类型
@@ -1381,7 +1379,7 @@ class DeadlockDetector:
                 d for d in self.deadlock_history
                 if (now - d.start_time).total_seconds() < self.history_retention_time
             ]
-        
+            
             # 如果有检测到的死锁，记录详细信息（即使未超过阈值也记录）
             if deadlocks:
                 for deadlock in deadlocks:
@@ -1429,79 +1427,364 @@ class DeadlockDetector:
             f"involving robots: {', '.join(deadlock.robot_ids)}, duration: {deadlock.duration:.1f}s"
         )
         
-        # 根据死锁类型采用不同策略
-        if deadlock.deadlock_type == "narrow_passage":
-            # 窄道死锁：让优先级低的机器人后退
-            result = await self._resolve_narrow_passage_deadlock(deadlock)
-            if result:
-                deadlock_logger.info(f"[RESOLVE] Narrow passage deadlock resolved successfully")
-            else:
-                deadlock_logger.error(f"[RESOLVE] Failed to resolve narrow passage deadlock")
-            return result
-        elif deadlock.deadlock_type == "circular_wait":
-            # 循环等待：打破循环，让一个机器人后退
-            result = await self._resolve_circular_wait_deadlock(deadlock)
-            if result:
-                deadlock_logger.info(f"[RESOLVE] Circular wait deadlock resolved successfully")
-            else:
-                deadlock_logger.error(f"[RESOLVE] Failed to resolve circular wait deadlock")
-            return result
+        # 只处理限行区域死锁，通过等待点机制解决
+        if deadlock.deadlock_type == "restricted_area":
+            # 限行区域死锁：通过限行区域通行管理器处理
+            area_id = deadlock.additional_info.get("area_id") if deadlock.additional_info else None
+            capacity = deadlock.additional_info.get("capacity") if deadlock.additional_info else 0
+            current_count = deadlock.additional_info.get("current_count") if deadlock.additional_info else 0
+            
+            deadlock_logger.info(
+                f"[RESOLVE] Restricted area deadlock in area {area_id}: "
+                f"{current_count}/{capacity} robots, triggering capacity overflow resolution"
+            )
+            
+            # 立即触发容量溢出检查和解决
+            if self.restricted_area_traffic_manager:
+                try:
+                    # 触发容量溢出检查，确保低优先级机器人被发送到等待点
+                    await self.restricted_area_traffic_manager._check_and_resolve_capacity_overflow()
+                    deadlock_logger.info(
+                        f"[RESOLVE] Capacity overflow resolution triggered for area {area_id}"
+                    )
+                except Exception as e:
+                    deadlock_logger.error(
+                        f"[RESOLVE] Failed to trigger capacity overflow resolution: {e}",
+                        exc_info=True
+                    )
+            
+            return True
         elif deadlock.deadlock_type == "mutual_blocking":
-            # 相互阻塞：让一个机器人后退
-            result = await self._resolve_mutual_blocking_deadlock(deadlock)
-            if result:
-                deadlock_logger.info(f"[RESOLVE] Mutual blocking deadlock resolved successfully")
-            else:
-                deadlock_logger.error(f"[RESOLVE] Failed to resolve mutual blocking deadlock")
-            return result
-        elif deadlock.deadlock_type == "blocking":
-            # 阻塞死锁（一个机器人没有任务，另一个机器人有任务）：使用与相互阻塞相同的策略
-            result = await self._resolve_mutual_blocking_deadlock(deadlock)
-            if result:
-                deadlock_logger.info(f"[RESOLVE] Blocking deadlock resolved successfully")
-            else:
-                deadlock_logger.error(f"[RESOLVE] Failed to resolve blocking deadlock")
-            return result
-        elif deadlock.deadlock_type == "path_blocking":
-            # 路径阻塞死锁：使用与相互阻塞相同的策略
-            result = await self._resolve_mutual_blocking_deadlock(deadlock)
-            if result:
-                deadlock_logger.info(f"[RESOLVE] Path blocking deadlock resolved successfully")
-            else:
-                deadlock_logger.error(f"[RESOLVE] Failed to resolve path blocking deadlock")
-            return result
-        elif deadlock.deadlock_type == "resource_contention":
-            # 资源竞争（单个机器人卡住）：尝试重新发送任务指令或移动到避让点
-            result = await self._resolve_resource_contention_deadlock(deadlock)
-            if result:
-                deadlock_logger.info(f"[RESOLVE] Resource contention deadlock resolved successfully")
-            else:
-                deadlock_logger.error(f"[RESOLVE] Failed to resolve resource contention deadlock")
-            return result
-        elif deadlock.deadlock_type == "livelock":
-            # 活锁：让机器人后退或重新规划路径
-            result = await self._resolve_livelock_deadlock(deadlock)
-            if result:
-                deadlock_logger.info(f"[RESOLVE] Livelock resolved successfully")
-            else:
-                deadlock_logger.error(f"[RESOLVE] Failed to resolve livelock")
-            return result
-        elif deadlock.deadlock_type == "starvation":
-            # 饥饿死锁：强制分配任务或提高优先级
-            result = await self._resolve_starvation_deadlock(deadlock)
-            if result:
-                deadlock_logger.info(f"[RESOLVE] Starvation deadlock resolved successfully")
-            else:
-                deadlock_logger.error(f"[RESOLVE] Failed to resolve starvation deadlock")
-            return result
+            # mutual_blocking类型的死锁：如果涉及限行区域，通过等待点机制解决
+            # 检查是否有机器人在限行区域内或附近
+            if self.restricted_area_traffic_manager:
+                try:
+                    # 检查是否有机器人在限行区域内
+                    restricted_areas = self.restricted_area_traffic_manager.map_manager.restricted_areas
+                    robots_in_restricted_area = []
+                    
+                    for robot_id in deadlock.robot_ids:
+                        try:
+                            robot_state = await self.robot_manager.get_robot_state(robot_id, force_update=False)
+                            if not robot_state or not robot_state.pose:
+                                continue
+                            
+                            robot_pose = robot_state.pose
+                            
+                            # 检查机器人是否在限行区域内或附近
+                            for area in restricted_areas:
+                                area_data = area.get("area", {})
+                                if not area_data:
+                                    continue
+                                
+                                start = area_data.get("start", {})
+                                end = area_data.get("end", {})
+                                half_width = area_data.get("half_width", 0.5)
+                                
+                                if not start or not end:
+                                    continue
+                                
+                                # 检查是否在限行区域内
+                                if self.restricted_area_traffic_manager.is_point_in_restricted_area(
+                                    robot_pose, start, end, half_width
+                                ):
+                                    robots_in_restricted_area.append(robot_id)
+                                    break
+                        except Exception as e:
+                            deadlock_logger.debug(f"Failed to check robot {robot_id} for restricted area: {e}")
+                            continue
+                    
+                    # 如果有机器人在限行区域内，触发容量溢出检查和路径阻塞解决
+                    if robots_in_restricted_area:
+                        deadlock_logger.info(
+                            f"[RESOLVE] Mutual blocking deadlock involves robots in restricted area: {robots_in_restricted_area}. "
+                            f"Triggering capacity overflow resolution and direct blocking check..."
+                        )
+                        try:
+                            # 首先检查直接阻塞（更紧急）
+                            await self.restricted_area_traffic_manager._check_direct_blocking_in_restricted_area()
+                            
+                            # 然后检查容量溢出
+                            await self.restricted_area_traffic_manager._check_and_resolve_capacity_overflow()
+                            
+                            # 同时检查是否有机器人阻塞了其他机器人到等待点的路径
+                            # 对于不在限行区域内的阻塞机器人，主动移动到等待点
+                            for robot_id in deadlock.robot_ids:
+                                if robot_id not in robots_in_restricted_area:
+                                    # 这个机器人不在限行区域内，但可能阻塞了其他机器人
+                                    # 检查是否有其他机器人需要前往等待点
+                                    try:
+                                        robot_state = await self.robot_manager.get_robot_state(robot_id, force_update=False)
+                                        if not robot_state or not robot_state.pose:
+                                            continue
+                                        
+                                        # 检查是否有其他机器人在等待状态，需要前往等待点
+                                        for waiting_robot_id, waiting_status in list(
+                                            self.restricted_area_traffic_manager.robot_waiting_status.items()
+                                        ):
+                                            if waiting_robot_id == robot_id:
+                                                continue
+                                            
+                                            waiting_point = waiting_status.get('waiting_point')
+                                            if not waiting_point:
+                                                continue
+                                            
+                                            # 检查这个机器人是否阻塞了等待机器人到等待点的路径
+                                            waiting_robot_state = await self.robot_manager.get_robot_state(waiting_robot_id, force_update=False)
+                                            if not waiting_robot_state or not waiting_robot_state.pose:
+                                                continue
+                                            
+                                            blocking_robots = await self.restricted_area_traffic_manager._check_path_blocked_to_waiting_point(
+                                                waiting_robot_id, 
+                                                waiting_robot_state.pose,
+                                                waiting_point
+                                            )
+                                            
+                                            if robot_id in blocking_robots:
+                                                # 这个机器人阻塞了等待机器人，尝试让它移动到等待点
+                                                deadlock_logger.info(
+                                                    f"[RESOLVE] Robot {robot_id} is blocking robot {waiting_robot_id}'s path to waiting point. "
+                                                    f"Attempting to move {robot_id} to waiting point..."
+                                                )
+                                                resolved = await self.restricted_area_traffic_manager._resolve_path_blocking(
+                                                    waiting_robot_id, [robot_id], waiting_point
+                                                )
+                                                if resolved:
+                                                    deadlock_logger.info(
+                                                        f"[RESOLVE] Successfully moved robot {robot_id} to resolve blocking"
+                                                    )
+                                    except Exception as e:
+                                        deadlock_logger.debug(f"Failed to check blocking for robot {robot_id}: {e}")
+                                        continue
+                            
+                            deadlock_logger.info(
+                                f"[RESOLVE] Mutual blocking deadlock resolution triggered for robots in restricted area"
+                            )
+                            return True
+                        except Exception as e:
+                            deadlock_logger.error(
+                                f"[RESOLVE] Failed to trigger capacity overflow resolution for mutual blocking: {e}",
+                                exc_info=True
+                            )
+                    else:
+                        # 即使没有机器人在限行区域内，也要检查是否有机器人阻塞了其他机器人到等待点的路径
+                        return await self._resolve_mutual_blocking_without_restricted_area(deadlock)
+                        
+                except Exception as e:
+                    deadlock_logger.error(
+                        f"[RESOLVE] Failed to check restricted area for mutual blocking deadlock: {e}",
+                        exc_info=True
+                    )
+            
+            return False
         else:
-            # 其他类型：使用默认策略
-            result = await self._resolve_default_deadlock(deadlock)
-            if result:
-                deadlock_logger.info(f"[RESOLVE] Default deadlock resolved successfully")
-            else:
-                deadlock_logger.error(f"[RESOLVE] Failed to resolve default deadlock")
-            return result
+            # 其他类型的死锁不再处理（只通过限行区域和等待点机制解决）
+            deadlock_logger.info(
+                f"[RESOLVE] Deadlock type {deadlock.deadlock_type} not handled "
+                f"(only restricted area deadlocks are handled via waiting points)"
+            )
+            return False
+    
+    async def _resolve_mutual_blocking_without_restricted_area(self, deadlock: DeadlockState) -> bool:
+        """
+        解决不在限行区域内的mutual_blocking死锁
+        
+        策略：
+        1. 检查是否有机器人阻塞了其他机器人到等待点的路径
+        2. 如果没有等待状态的机器人，选择优先级最低的机器人移动到等待点
+        
+        Args:
+            deadlock: 死锁状态
+            
+        Returns:
+            是否成功解决
+        """
+        deadlock_logger.info(
+            f"[RESOLVE] Mutual blocking deadlock does not involve robots in restricted area. "
+            f"Checking for path blocking to waiting points..."
+        )
+        
+        # 1. 检查是否有机器人阻塞了其他机器人到等待点的路径
+        resolved = await self._check_and_resolve_path_blocking_for_waiting_robots(deadlock)
+        if resolved:
+            return True
+        
+        # 2. 如果没有等待状态的机器人，选择优先级最低的机器人移动到等待点
+        return await self._move_lowest_priority_robot_to_waiting_point(deadlock)
+    
+    async def _check_and_resolve_path_blocking_for_waiting_robots(self, deadlock: DeadlockState) -> bool:
+        """
+        检查并解决等待机器人到等待点的路径阻塞
+        
+        Args:
+            deadlock: 死锁状态
+            
+        Returns:
+            是否成功解决了阻塞
+        """
+        if not self.restricted_area_traffic_manager:
+            return False
+        
+        for robot_id in deadlock.robot_ids:
+            try:
+                robot_state = await self.robot_manager.get_robot_state(robot_id, force_update=False)
+                if not robot_state or not robot_state.pose:
+                    continue
+                
+                # 检查是否有其他机器人在等待状态，需要前往等待点
+                for waiting_robot_id, waiting_status in list(
+                    self.restricted_area_traffic_manager.robot_waiting_status.items()
+                ):
+                    if waiting_robot_id == robot_id:
+                        continue
+                    
+                    waiting_point = waiting_status.get('waiting_point')
+                    if not waiting_point:
+                        continue
+                    
+                    # 检查这个机器人是否阻塞了等待机器人到等待点的路径
+                    waiting_robot_state = await self.robot_manager.get_robot_state(waiting_robot_id, force_update=False)
+                    if not waiting_robot_state or not waiting_robot_state.pose:
+                        continue
+                    
+                    blocking_robots = await self.restricted_area_traffic_manager._check_path_blocked_to_waiting_point(
+                        waiting_robot_id, 
+                        waiting_robot_state.pose,
+                        waiting_point
+                    )
+                    
+                    if robot_id in blocking_robots:
+                        # 这个机器人阻塞了等待机器人，尝试让它移动到等待点
+                        deadlock_logger.info(
+                            f"[RESOLVE] Robot {robot_id} is blocking robot {waiting_robot_id}'s path to waiting point. "
+                            f"Attempting to move {robot_id} to waiting point..."
+                        )
+                        resolved = await self.restricted_area_traffic_manager._resolve_path_blocking(
+                            waiting_robot_id, [robot_id], waiting_point
+                        )
+                        if resolved:
+                            deadlock_logger.info(
+                                f"[RESOLVE] Successfully moved robot {robot_id} to resolve blocking"
+                            )
+                            return True
+            except Exception as e:
+                deadlock_logger.debug(f"Failed to check blocking for robot {robot_id}: {e}")
+                continue
+        
+        return False
+    
+    async def _move_lowest_priority_robot_to_waiting_point(self, deadlock: DeadlockState) -> bool:
+        """
+        移动优先级最低的机器人到等待点
+        
+        Args:
+            deadlock: 死锁状态
+            
+        Returns:
+            是否成功移动
+        """
+        if not self.restricted_area_traffic_manager:
+            return False
+        
+        try:
+            # 获取所有机器人的优先级
+            robot_priorities = []
+            for robot_id in deadlock.robot_ids:
+                try:
+                    priority = await self._get_robot_task_priority_with_state(robot_id)
+                    robot_priorities.append((robot_id, priority))
+                except Exception as e:
+                    deadlock_logger.debug(f"Failed to get priority for robot {robot_id}: {e}")
+                    continue
+            
+            if not robot_priorities:
+                # 如果无法获取优先级，直接触发容量溢出检查
+                await self.restricted_area_traffic_manager._check_and_resolve_capacity_overflow()
+                deadlock_logger.info(
+                    f"[RESOLVE] Triggered capacity overflow check for mutual blocking deadlock (no priorities available)"
+                )
+                return True
+            
+            # 按优先级排序，选择优先级最低的机器人
+            robot_priorities.sort(key=lambda x: x[1])
+            lowest_priority_robot = robot_priorities[0][0]
+            
+            deadlock_logger.info(
+                f"[RESOLVE] No waiting robots found, moving lowest priority robot {lowest_priority_robot} to waiting point"
+            )
+            
+            # 获取机器人状态
+            robot_state = await self.robot_manager.get_robot_state(lowest_priority_robot, force_update=False)
+            if not robot_state or not robot_state.pose:
+                await self.restricted_area_traffic_manager._check_and_resolve_capacity_overflow()
+                return True
+            
+            # 查找等待点
+            waiting_point = await self._find_waiting_point_for_robot(lowest_priority_robot, robot_state.pose)
+            
+            if waiting_point:
+                # 移动机器人到等待点
+                agent = self.robot_manager.get_robot_agent(lowest_priority_robot)
+                if agent:
+                    try:
+                        move_result = await agent.move_to(
+                            waiting_point,
+                            mode=0,
+                            acceptable_precision=0.3,
+                            speed_ratio=0.5
+                        )
+                        if move_result:
+                            deadlock_logger.info(
+                                f"[RESOLVE] Successfully moved robot {lowest_priority_robot} to waiting point at ({waiting_point.x:.2f}, {waiting_point.y:.2f})"
+                            )
+                            return True
+                    except Exception as e:
+                        deadlock_logger.error(f"Failed to move robot {lowest_priority_robot} to waiting point: {e}")
+            
+            # 如果找不到等待点，尝试触发容量溢出检查
+            await self.restricted_area_traffic_manager._check_and_resolve_capacity_overflow()
+            deadlock_logger.info(
+                f"[RESOLVE] Triggered capacity overflow check for mutual blocking deadlock"
+            )
+            return True
+        except Exception as e:
+            deadlock_logger.error(f"Failed to move lowest priority robot to waiting point: {e}", exc_info=True)
+            return False
+    
+    async def _find_waiting_point_for_robot(self, robot_id: str, robot_pose) -> Optional[Pose]:
+        """
+        为机器人查找等待点
+        
+        Args:
+            robot_id: 机器人ID
+            robot_pose: 机器人当前位置
+            
+        Returns:
+            等待点位置，如果找不到则返回None
+        """
+        if not self.restricted_area_traffic_manager:
+            return None
+        
+        try:
+            # 尝试从限行区域附近查找等待点
+            restricted_areas = self.restricted_area_traffic_manager.map_manager.restricted_areas
+            for area in restricted_areas:
+                area_data = area.get("area", {})
+                if not area_data:
+                    continue
+                start = area_data.get("start", {})
+                end = area_data.get("end", {})
+                half_width = area_data.get("half_width", 0.5)
+                if start and end:
+                    waiting_point = self.restricted_area_traffic_manager.find_waiting_point_near_restricted_area(
+                        start, end, half_width, robot_pose, max_distance=10.0
+                    )
+                    if waiting_point:
+                        return waiting_point
+        except Exception as e:
+            deadlock_logger.debug(f"Failed to find waiting point for robot {robot_id}: {e}")
+        
+        return None
     
     def _get_robot_task_priority(self, robot_id: str) -> float:
         """
@@ -1776,9 +2059,23 @@ class DeadlockDetector:
                 # 获取机器人状态
                 state = robot_states[robot_id_to_resolve]
                 
-                # 尝试查找等待点（系统自动计算）
+                # 尝试查找等待点（优先使用限行区域通行管理器的等待点）
                 waiting_point = None
-                if self.path_planner:
+                if self.restricted_area_traffic_manager:
+                    # 优先使用限行区域通行管理器的等待点查找方法
+                    try:
+                        waiting_point, _ = await self.restricted_area_traffic_manager.find_waiting_point_for_robot(
+                            robot_id=robot_id_to_resolve,
+                            current_pose=state.pose,
+                            restricted_area_id=None  # 不指定特定限行区域，查找通用等待点
+                        )
+                        if waiting_point:
+                            deadlock_logger.info(f"[WAITING POINT] Found waiting point from restricted area manager for robot {robot_id_to_resolve}")
+                    except Exception as e:
+                        deadlock_logger.warning(f"[WAITING POINT] Failed to get waiting point from restricted area manager: {e}")
+                
+                # 如果限行区域通行管理器没有找到等待点，使用路径规划器查找
+                if not waiting_point and self.path_planner:
                     waiting_point = self.path_planner.find_waiting_point(
                         current_pose=state.pose,
                         narrow_passage_pose=narrow_passage_pose,
@@ -1952,9 +2249,51 @@ class DeadlockDetector:
                 if not state:
                     continue
                 
-                # 优先尝试查找等待点（系统自动计算）
+                # 检查机器人是否已经在充电桩附近（距离原点<1米），如果是就跳过死锁解除
+                distance_to_origin = math.sqrt(state.pose.x * state.pose.x + state.pose.y * state.pose.y)
+                if distance_to_origin < 1.0:  # 距离原点小于1米，认为在充电桩
+                    deadlock_logger.info(
+                        f"[UNLOCK] Robot {robot_id_to_resolve} is at charging dock "
+                        f"(distance to origin: {distance_to_origin:.2f}m), "
+                        f"skipping circular wait deadlock resolution"
+                    )
+                    continue
+                
+                # 检查机器人是否正在回桩（有go_home action），如果有就跳过死锁解除
+                if agent:
+                    try:
+                        current_action = await agent.get_current_action()
+                        if current_action and current_action.action_id:
+                            if current_action.action_name and "BackHome" in current_action.action_name:
+                                deadlock_logger.info(
+                                    f"[UNLOCK] Robot {robot_id_to_resolve} is returning to charging dock, "
+                                    f"skipping circular wait deadlock resolution"
+                                )
+                                continue
+                    except Exception as e:
+                        deadlock_logger.debug(f"Failed to get current action for robot {robot_id_to_resolve}: {e}")
+                
+                # 优先尝试查找等待点（优先使用限行区域通行管理器的POI等待点）
                 waiting_point = None
-                if self.path_planner:
+                
+                # 1. 优先使用限行区域通行管理器的等待点查找方法（支持POI等待点）
+                if self.restricted_area_traffic_manager:
+                    try:
+                        waiting_point, _ = await self.restricted_area_traffic_manager.find_waiting_point_for_robot(
+                            robot_id=robot_id_to_resolve,
+                            current_pose=state.pose,
+                            restricted_area_id=None  # 不指定特定限行区域，查找通用等待点
+                        )
+                        if waiting_point:
+                            deadlock_logger.info(
+                                f"[UNLOCK] Found waiting point from restricted area manager for robot {robot_id_to_resolve} "
+                                f"at ({waiting_point.x:.2f}, {waiting_point.y:.2f})"
+                            )
+                    except Exception as e:
+                        deadlock_logger.debug(f"[UNLOCK] Failed to get waiting point from restricted area manager: {e}")
+                
+                # 2. 如果限行区域通行管理器没有找到等待点，尝试动态计算等待点
+                if not waiting_point and self.path_planner:
                     # 计算所有机器人的中心位置（用于确定等待点位置）
                     center_x = sum(pose.x for pose in [robot_states[rid].pose for rid in robot_states.keys()]) / len(robot_states)
                     center_y = sum(pose.y for pose in [robot_states[rid].pose for rid in robot_states.keys()]) / len(robot_states)
@@ -2018,26 +2357,26 @@ class DeadlockDetector:
                         )
                     success_count += 1
                 else:
-                    # 如果找不到等待点，使用后退策略
-                    back_distance = self.circular_wait_backoff_distance
-                    back_x = state.pose.x - math.cos(state.pose.yaw) * back_distance
-                    back_y = state.pose.y - math.sin(state.pose.yaw) * back_distance
-                    back_pose = Pose(
-                        x=back_x,
-                        y=back_y,
-                    z=state.pose.z,
-                    yaw=state.pose.yaw
-                )
-                
-                    move_result = await agent.move_to(back_pose, mode=0, acceptable_precision=self.backoff_acceptable_precision, speed_ratio=self.backoff_speed_ratio)
-                    action_id = move_result.action_id if move_result else None
-                    deadlock_logger.info(
-                        f"[UNLOCK] Circular wait deadlock: robot {robot_id_to_resolve} "
-                        f"(priority={priority_value}) backing up {back_distance}m (waiting point not found), action_id={action_id}"
-                    )
-                logger.info(
-                    f"Resolved circular wait deadlock: robot {robot_id_to_resolve} "
-                        f"(priority={priority_value}) backing up {back_distance}m (waiting point not found)"
+                        # 如果找不到等待点，使用后退策略
+                        back_distance = self.circular_wait_backoff_distance
+                        back_x = state.pose.x - math.cos(state.pose.yaw) * back_distance
+                        back_y = state.pose.y - math.sin(state.pose.yaw) * back_distance
+                        back_pose = Pose(
+                            x=back_x,
+                            y=back_y,
+                            z=state.pose.z,
+                            yaw=state.pose.yaw
+                        )
+                        
+                        move_result = await agent.move_to(back_pose, mode=0, acceptable_precision=self.backoff_acceptable_precision, speed_ratio=self.backoff_speed_ratio)
+                        action_id = move_result.action_id if move_result else None
+                        deadlock_logger.info(
+                            f"[UNLOCK] Circular wait deadlock: robot {robot_id_to_resolve} "
+                            f"(priority={priority_value}) backing up {back_distance}m (waiting point not found), action_id={action_id}"
+                        )
+                        logger.info(
+                            f"Resolved circular wait deadlock: robot {robot_id_to_resolve} "
+                    f"(priority={priority_value}) backing up {back_distance}m (waiting point not found)"
                 )
                 success_count += 1
                 
@@ -2384,9 +2723,94 @@ class DeadlockDetector:
                     logger.error(f"Could not get state for robot {robot_id_to_resolve} before resolving")
                     continue
                 
-                # 优先尝试从预定义等待点中选择，如果启用且可用
+                # 检查机器人是否已经在充电桩附近（距离原点<1米），如果是就跳过死锁解除
+                # 充电桩通常在原点(0,0)附近
+                distance_to_origin = math.sqrt(state.pose.x * state.pose.x + state.pose.y * state.pose.y)
+                if distance_to_origin < 1.0:  # 距离原点小于1米，认为在充电桩
+                    deadlock_logger.info(
+                        f"[UNLOCK] Robot {robot_id_to_resolve} is at charging dock "
+                        f"(distance to origin: {distance_to_origin:.2f}m), "
+                        f"skipping deadlock resolution to avoid moving robot away from dock"
+                    )
+                    continue
+                
+                # 检查机器人是否正在回桩（有go_home action），如果有就跳过死锁解除
+                try:
+                    current_action = await agent.get_current_action()
+                    if current_action and current_action.action_id:
+                        # 检查是否是回桩action（通过action_name判断）
+                        if current_action.action_name and "BackHome" in current_action.action_name:
+                            deadlock_logger.info(
+                                f"[UNLOCK] Robot {robot_id_to_resolve} is returning to charging dock "
+                                f"(action_id={current_action.action_id}), "
+                                f"skipping deadlock resolution to avoid interrupting go_home action"
+                            )
+                            continue
+                except Exception as e:
+                    deadlock_logger.debug(f"Failed to get current action for robot {robot_id_to_resolve}: {e}")
+                
+                # 检查机器人最近完成的任务是否是GO_HOME（刚回桩完成）
+                # 如果最近完成的任务是GO_HOME且完成时间在5分钟内，认为机器人刚回桩，不应该让它避让
+                recent_go_home_completed = False
+                if self.task_scheduler:
+                    for task in self.task_scheduler.tasks.values():
+                        if (task.robot_id == robot_id_to_resolve and 
+                            task.status.value == "completed" and 
+                            task.completed_at):
+                            # 检查是否是最近5分钟内完成的GO_HOME任务
+                            time_since_completion = (datetime.now() - task.completed_at).total_seconds()
+                            if time_since_completion < 300:  # 5分钟内
+                                # 检查任务是否包含GO_HOME动作
+                                # 对于多动作任务，检查最后一个动作
+                                if task.is_multi_action and task.actions:
+                                    last_action = task.actions[-1] if task.actions else None
+                                    if last_action and hasattr(last_action, 'action_type'):
+                                        # 使用字符串比较，因为ActionType可能是枚举
+                                        action_type_str = str(last_action.action_type)
+                                        if "GO_HOME" in action_type_str.upper():
+                                            recent_go_home_completed = True
+                                            deadlock_logger.info(
+                                                f"[UNLOCK] Robot {robot_id_to_resolve} recently completed GO_HOME task "
+                                                f"{task.task_id} ({time_since_completion:.1f}s ago), "
+                                                f"skipping deadlock resolution"
+                                            )
+                                            break
+                                # 对于单动作任务，检查action_type
+                                elif hasattr(task, 'action_type') and task.action_type:
+                                    action_type_str = str(task.action_type)
+                                    if "GO_HOME" in action_type_str.upper():
+                                        recent_go_home_completed = True
+                                        deadlock_logger.info(
+                                            f"[UNLOCK] Robot {robot_id_to_resolve} recently completed GO_HOME task "
+                                            f"{task.task_id} ({time_since_completion:.1f}s ago), "
+                                            f"skipping deadlock resolution"
+                                        )
+                                        break
+                
+                if recent_go_home_completed:
+                    continue
+                
+                # 优先尝试从等待点中选择（优先使用限行区域通行管理器的POI等待点）
                 waiting_point = None
-                if self.use_predefined_waiting_points and self.predefined_waiting_points:
+                
+                # 1. 优先使用限行区域通行管理器的等待点查找方法（支持POI等待点）
+                if self.restricted_area_traffic_manager:
+                    try:
+                        waiting_point, _ = await self.restricted_area_traffic_manager.find_waiting_point_for_robot(
+                            robot_id=robot_id_to_resolve,
+                            current_pose=state.pose,
+                            restricted_area_id=None  # 不指定特定限行区域，查找通用等待点
+                        )
+                        if waiting_point:
+                            deadlock_logger.info(
+                                f"[UNLOCK] Found waiting point from restricted area manager for robot {robot_id_to_resolve} "
+                                f"at ({waiting_point.x:.2f}, {waiting_point.y:.2f})"
+                            )
+                    except Exception as e:
+                        deadlock_logger.debug(f"[UNLOCK] Failed to get waiting point from restricted area manager: {e}")
+                
+                # 2. 如果限行区域通行管理器没有找到等待点，尝试从预定义等待点中选择
+                if not waiting_point and self.use_predefined_waiting_points and self.predefined_waiting_points:
                     waiting_point = await self._select_predefined_waiting_point(
                         robot_id_to_resolve,
                         state.pose,
@@ -2398,7 +2822,7 @@ class DeadlockDetector:
                             f"for robot {robot_id_to_resolve}"
                         )
                 
-                # 如果预定义等待点不可用，尝试动态计算等待点
+                # 3. 如果预定义等待点不可用，尝试动态计算等待点
                 if not waiting_point and self.path_planner:
                     # 获取所有机器人的状态（用于计算中心位置）
                     all_robot_states = {}
@@ -2568,7 +2992,7 @@ class DeadlockDetector:
                     back_pose = Pose(
                         x=back_x,
                         y=back_y,
-                    z=state.pose.z,
+                        z=state.pose.z,
                         yaw=state.pose.yaw
                     )
                     
@@ -2606,10 +3030,10 @@ class DeadlockDetector:
                         f"[UNLOCK] Mutual blocking deadlock: robot {robot_id_to_resolve} "
                         f"(priority={priority_value}) backing up {back_distance}m (waiting point not available or in deadlock area), action_id={action_id}"
                     )
-                    logger.info(
-                        f"✓ Successfully moved robot {robot_id_to_resolve} (priority={priority_value}) "
+                logger.info(
+                    f"✓ Successfully moved robot {robot_id_to_resolve} (priority={priority_value}) "
                         f"back {back_distance}m to resolve mutual blocking deadlock (waiting point not available or in deadlock area)"
-                    )
+                )
                     
                 success_count += 1
                 
@@ -2681,9 +3105,64 @@ class DeadlockDetector:
             
             if not task:
                 logger.warning(f"No executing task found for robot {robot_id_to_resolve} in resource contention deadlock")
-                # 即使没有任务，也尝试让机器人后退一点，避免卡在当前位置
+                # 检查机器人是否已经有正在执行的action，如果有就不发送新的move_to指令
+                try:
+                    current_action = await agent.get_current_action()
+                    if current_action and current_action.action_id:
+                        logger.info(
+                            f"Robot {robot_id_to_resolve} already has an active action (action_id={current_action.action_id}), "
+                            f"skipping resource contention resolution to avoid duplicate move_to commands"
+                        )
+                        # 删除死锁记录，避免重复处理
+                        self.deadlock_history = [d for d in self.deadlock_history if d != deadlock]
+                        return True
+                except Exception as e:
+                    logger.debug(f"Failed to get current action for robot {robot_id_to_resolve}: {e}")
+                
+                # 检查机器人状态，如果机器人是idle且没有current_action，说明它可能已经完成了之前的移动
                 state = await self.robot_manager.get_robot_state(robot_id_to_resolve)
                 if state and state.pose:
+                    # 检查机器人是否已经在充电桩附近（距离原点<1米），如果是就不应该发送避让指令
+                    distance_to_origin = math.sqrt(state.pose.x * state.pose.x + state.pose.y * state.pose.y)
+                    if distance_to_origin < 1.0:  # 距离原点小于1米，认为在充电桩
+                        deadlock_logger.info(
+                            f"[UNLOCK] Robot {robot_id_to_resolve} is at charging dock "
+                            f"(distance to origin: {distance_to_origin:.2f}m), "
+                            f"skipping resource contention resolution to avoid moving robot away from dock"
+                        )
+                        # 删除死锁记录，避免重复处理
+                        self.deadlock_history = [d for d in self.deadlock_history if d != deadlock]
+                        return True
+                    
+                    # 检查机器人是否正在回桩（有go_home action），如果有就跳过死锁解除
+                    try:
+                        current_action = await agent.get_current_action()
+                        if current_action and current_action.action_id:
+                            # 检查是否是回桩action（通过action_name判断）
+                            if current_action.action_name and "BackHome" in current_action.action_name:
+                                deadlock_logger.info(
+                                    f"[UNLOCK] Robot {robot_id_to_resolve} is returning to charging dock "
+                                    f"(action_id={current_action.action_id}), "
+                                    f"skipping resource contention resolution to avoid interrupting go_home action"
+                                )
+                                # 删除死锁记录，避免重复处理
+                                self.deadlock_history = [d for d in self.deadlock_history if d != deadlock]
+                                return True
+                    except Exception as e:
+                        deadlock_logger.debug(f"Failed to get current action for robot {robot_id_to_resolve}: {e}")
+                    
+                    # 如果机器人状态是idle且没有current_action，说明它可能已经完成了之前的移动
+                    # 这种情况下不应该再发送move_to指令，避免循环发送
+                    if state.status == "idle" and state.current_action is None:
+                        logger.info(
+                            f"Robot {robot_id_to_resolve} is idle with no current_action, "
+                            f"skipping resource contention resolution to avoid duplicate move_to commands"
+                        )
+                        # 删除死锁记录，避免重复处理
+                        self.deadlock_history = [d for d in self.deadlock_history if d != deadlock]
+                        return True
+                    
+                    # 只有在机器人确实卡住且没有action的情况下，才发送move_to指令
                     back_distance = 1.0
                     back_x = state.pose.x - math.cos(state.pose.yaw) * back_distance
                     back_y = state.pose.y - math.sin(state.pose.yaw) * back_distance
@@ -2912,9 +3391,52 @@ class DeadlockDetector:
                 if not state:
                     continue
                 
-                # 优先尝试查找等待点（系统自动计算）
+                # 检查机器人是否已经在充电桩附近（距离原点<1米），如果是就跳过死锁解除
+                distance_to_origin = math.sqrt(state.pose.x * state.pose.x + state.pose.y * state.pose.y)
+                if distance_to_origin < 1.0:  # 距离原点小于1米，认为在充电桩
+                    deadlock_logger.info(
+                        f"[UNLOCK] Robot {robot_id_to_resolve} is at charging dock "
+                        f"(distance to origin: {distance_to_origin:.2f}m), "
+                        f"skipping livelock deadlock resolution"
+                    )
+                    continue
+                
+                # 检查机器人是否正在回桩（有go_home action），如果有就跳过死锁解除
+                agent = self.robot_manager.get_robot_agent(robot_id_to_resolve)
+                if agent:
+                    try:
+                        current_action = await agent.get_current_action()
+                        if current_action and current_action.action_id:
+                            if current_action.action_name and "BackHome" in current_action.action_name:
+                                deadlock_logger.info(
+                                    f"[UNLOCK] Robot {robot_id_to_resolve} is returning to charging dock, "
+                                    f"skipping livelock deadlock resolution"
+                                )
+                                continue
+                    except Exception as e:
+                        deadlock_logger.debug(f"Failed to get current action for robot {robot_id_to_resolve}: {e}")
+                
+                # 优先尝试查找等待点（优先使用限行区域通行管理器的POI等待点）
                 waiting_point = None
-                if self.path_planner:
+                
+                # 1. 优先使用限行区域通行管理器的等待点查找方法（支持POI等待点）
+                if self.restricted_area_traffic_manager:
+                    try:
+                        waiting_point, _ = await self.restricted_area_traffic_manager.find_waiting_point_for_robot(
+                            robot_id=robot_id_to_resolve,
+                            current_pose=state.pose,
+                            restricted_area_id=None  # 不指定特定限行区域，查找通用等待点
+                        )
+                        if waiting_point:
+                            deadlock_logger.info(
+                                f"[UNLOCK] Found waiting point from restricted area manager for robot {robot_id_to_resolve} "
+                                f"at ({waiting_point.x:.2f}, {waiting_point.y:.2f})"
+                            )
+                    except Exception as e:
+                        deadlock_logger.debug(f"[UNLOCK] Failed to get waiting point from restricted area manager: {e}")
+                
+                # 2. 如果限行区域通行管理器没有找到等待点，尝试动态计算等待点
+                if not waiting_point and self.path_planner:
                     if len(robot_states) > 0:
                         # 计算所有机器人的中心位置（用于确定等待点位置）
                         center_x = sum(pose.x for pose in [robot_states[rid].pose for rid in robot_states.keys()]) / len(robot_states)
@@ -2991,19 +3513,19 @@ class DeadlockDetector:
                         y=back_y,
                     z=state.pose.z,
                     yaw=state.pose.yaw
-                )
-                
+                    )
+                    
                     move_result = await agent.move_to(back_pose, mode=0, acceptable_precision=self.backoff_acceptable_precision, speed_ratio=self.backoff_speed_ratio)
                     action_id = move_result.action_id if move_result else None
                     deadlock_logger.info(
                         f"[UNLOCK] Livelock: robot {robot_id_to_resolve} "
                         f"(priority={priority_value}) backing up {back_distance}m (waiting point not found), action_id={action_id}"
                     )
-                logger.info(
-                    f"Resolved livelock: robot {robot_id_to_resolve} "
+                    logger.info(
+                        f"Resolved livelock: robot {robot_id_to_resolve} "
                         f"(priority={priority_value}) backing up {back_distance}m (waiting point not found)"
-                )
-                success_count += 1
+                    )
+                    success_count += 1
                 
             except Exception as e:
                 logger.error(f"Failed to resolve livelock for robot {robot_id_to_resolve}: {e}")

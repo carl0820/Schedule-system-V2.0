@@ -65,6 +65,8 @@ class MapManager:
         self.current_map_id: Optional[str] = None  # 当前加载到内存的地图ID
         # 虚拟墙信息（从机器人获取）
         self.virtual_walls: List[Dict[str, Any]] = []  # 存储虚拟墙列表
+        # 限行区域信息（从机器人获取）
+        self.restricted_areas: List[Dict[str, Any]] = []  # 存储限行区域列表
         self._load_maps_metadata()
         self._load_default_map()
     

@@ -77,6 +77,10 @@ class ActionItem(BaseModel):
     wait_duration: Optional[float] = None  # 等待时长（秒，wait时使用）
     acceptable_precision: float = 0.3  # 到达精度（米，move_to时使用）
     speed_ratio: float = 1.0  # 速度比例（move_to时使用）
+    # move_options 配置参数
+    mode: int = 0  # 导航模式（0:Free navigation, 1:Strict Track, 2:Track priority）
+    flags: Optional[List[str]] = None  # 标志列表（如：["precise", "with_yaw"]）
+    fail_retry_count: int = 0  # 失败重试次数
 
 
 class MultiActionTaskCreate(BaseModel):
@@ -112,7 +116,10 @@ class MultiActionTaskCreate(BaseModel):
                                     "roll": 0.0
                                 },
                                 "acceptable_precision": 0.3,
-                                "speed_ratio": 1.0
+                                "speed_ratio": 1.0,
+                                "mode": 0,
+                                "flags": ["precise", "with_yaw"],
+                                "fail_retry_count": 0
                             },
                             {
                                 "action_type": "wait",
@@ -131,7 +138,10 @@ class MultiActionTaskCreate(BaseModel):
                                 "action_type": "move_to",
                                 "poi_name": "PO3",
                                 "acceptable_precision": 0.3,
-                                "speed_ratio": 1.0
+                                "speed_ratio": 1.0,
+                                "mode": 0,
+                                "flags": ["precise"],
+                                "fail_retry_count": 0
                             },
                             {
                                 "action_type": "wait",
@@ -150,7 +160,10 @@ class MultiActionTaskCreate(BaseModel):
                                 "action_type": "move_to",
                                 "poi_name": "PO7",
                                 "acceptable_precision": 0.3,
-                                "speed_ratio": 1.0
+                                "speed_ratio": 1.0,
+                                "mode": 0,
+                                "flags": ["precise"],
+                                "fail_retry_count": 0
                             },
                             {
                                 "action_type": "wait",
@@ -160,7 +173,10 @@ class MultiActionTaskCreate(BaseModel):
                                 "action_type": "move_to",
                                 "poi_name": "P02",
                                 "acceptable_precision": 0.3,
-                                "speed_ratio": 1.0
+                                "speed_ratio": 1.0,
+                                "mode": 0,
+                                "flags": ["precise"],
+                                "fail_retry_count": 0
                             },
                             {
                                 "action_type": "go_home"

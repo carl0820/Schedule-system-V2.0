@@ -72,6 +72,18 @@ async def get_map_info(
                 except Exception as e:
                     logger.debug(f"Failed to auto-load virtual walls from robot {robot_id}: {e}")
                 
+                # 自动加载限行区域信息
+                try:
+                    import asyncio
+                    areas = await asyncio.wait_for(
+                        robot_agent.get_restricted_areas(),
+                        timeout=3.0
+                    )
+                    map_manager.restricted_areas = [area.dict() for area in areas]
+                    logger.info(f"Auto-loaded {len(areas)} restricted areas from robot {robot_id}")
+                except Exception as e:
+                    logger.debug(f"Failed to auto-load restricted areas from robot {robot_id}: {e}")
+                
                 # 重新获取地图信息
                 info = map_manager.get_map_info()
                 if info:
@@ -137,13 +149,27 @@ async def load_map(
         except Exception as e:
             logger.warning(f"Failed to load virtual walls from robot {robot_id}: {e}, continuing without virtual walls")
         
+        # 自动加载限行区域信息
+        try:
+            areas = await asyncio.wait_for(
+                robot_agent.get_restricted_areas(),
+                timeout=3.0
+            )
+            map_manager.restricted_areas = [area.dict() for area in areas]
+            logger.info(f"Loaded {len(areas)} restricted areas from robot {robot_id}")
+        except asyncio.TimeoutError:
+            logger.warning(f"Timeout loading restricted areas from robot {robot_id} (3s), continuing without restricted areas")
+        except Exception as e:
+            logger.warning(f"Failed to load restricted areas from robot {robot_id}: {e}, continuing without restricted areas")
+        
         # 返回地图信息
         info = map_manager.get_map_info()
         return {
             "message": "Map loaded successfully",
             "robot_id": robot_id,
             "map_info": info,
-            "virtual_walls_count": len(map_manager.virtual_walls)
+            "virtual_walls_count": len(map_manager.virtual_walls),
+            "restricted_areas_count": len(map_manager.restricted_areas)
         }
     except HTTPException:
         raise
@@ -606,4 +632,91 @@ async def get_virtual_walls(
         logger.error(f"Failed to get virtual walls: {e}", exc_info=True)
         # 返回缓存的虚拟墙信息
         return map_manager.virtual_walls
+
+
+@router.get("/restricted-areas", response_model=list)
+async def get_restricted_areas(
+    robot_id: Optional[str] = None,
+    robot_manager: RobotManager = Depends(get_robot_manager),
+    map_manager: MapManager = Depends(get_map_manager)
+):
+    """
+    获取限行区域信息
+    
+    限行区域用于多机防死锁调度通行，结合等待点实现机器人通行控制。
+    
+    Args:
+        robot_id: 机器人ID（可选，如果不提供则从所有机器人获取）
+    """
+    import asyncio
+    
+    try:
+        # 如果指定了robot_id，只从该机器人获取
+        if robot_id:
+            robot_agent = robot_manager.get_robot_agent(robot_id)
+            if not robot_agent:
+                raise HTTPException(status_code=404, detail=f"Robot {robot_id} not found")
+            
+            try:
+                areas = await asyncio.wait_for(
+                    robot_agent.get_restricted_areas(),
+                    timeout=3.0
+                )
+                # 更新map_manager中的限行区域信息
+                map_manager.restricted_areas = [area.dict() for area in areas]
+                return [area.dict() for area in areas]
+            except asyncio.TimeoutError:
+                logger.warning(f"Timeout getting restricted areas from robot {robot_id} (3s)")
+                # 返回缓存的限行区域信息
+                return map_manager.restricted_areas
+            except Exception as e:
+                logger.warning(f"Failed to get restricted areas from robot {robot_id}: {e}")
+                # 返回缓存的限行区域信息
+                return map_manager.restricted_areas
+        else:
+            # 从所有机器人获取限行区域（合并去重）
+            robot_ids = robot_manager.list_robots()
+            if not robot_ids:
+                return map_manager.restricted_areas
+            
+            async def get_robot_areas(robot_id: str):
+                """获取单个机器人的限行区域（带超时）"""
+                try:
+                    agent = robot_manager.get_robot_agent(robot_id)
+                    if agent:
+                        areas = await asyncio.wait_for(
+                            agent.get_restricted_areas(),
+                            timeout=2.0
+                        )
+                        return [area.dict() for area in areas]
+                except asyncio.TimeoutError:
+                    logger.debug(f"Timeout getting restricted areas from robot {robot_id} (2s)")
+                except Exception as e:
+                    logger.debug(f"Failed to get restricted areas for robot {robot_id}: {e}")
+                return []
+            
+            # 并发获取所有限行区域
+            area_tasks = [get_robot_areas(robot_id) for robot_id in robot_ids]
+            area_results = await asyncio.gather(*area_tasks, return_exceptions=True)
+            
+            # 合并所有限行区域（按ID去重）
+            all_areas = []
+            seen_ids = set()
+            for area_list in area_results:
+                if isinstance(area_list, list):
+                    for area in area_list:
+                        area_id = area.get("id")
+                        if area_id is not None and area_id not in seen_ids:
+                            seen_ids.add(area_id)
+                            all_areas.append(area)
+            
+            # 更新map_manager中的限行区域信息
+            map_manager.restricted_areas = all_areas
+            return all_areas
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get restricted areas: {e}", exc_info=True)
+        # 返回缓存的限行区域信息
+        return map_manager.restricted_areas
 

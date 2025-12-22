@@ -3,7 +3,7 @@
 """
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 from app.services.config_manager import get_config_manager
 from app.services.network_detector import get_network_detector, NetworkType
 from app.services.robot_manager import get_robot_manager
@@ -60,6 +60,8 @@ class DeadlockConfigUpdate(BaseModel):
     mutual_blocking_distance: Optional[float] = None
     narrow_passage_detection_distance: Optional[float] = None
     history_retention_time: Optional[float] = None
+    poi_waiting_points: Optional[List[str]] = None  # POI等待点名称列表
+    use_poi_waiting_points: Optional[bool] = None  # 是否使用POI等待点
 
 
 @router.get("/config/deadlock")

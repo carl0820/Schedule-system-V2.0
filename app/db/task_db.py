@@ -30,12 +30,16 @@ class TaskDatabase:
     
     @contextmanager
     def _get_connection(self):
-        """获取数据库连接（上下文管理器）"""
+        """获取数据库连接（上下文管理器，优化超时设置）"""
+        # 缩短数据库连接超时时间，快速失败而不是长时间等待
         conn = sqlite3.connect(
             str(self.db_path),
             check_same_thread=False,
-            timeout=30.0
+            timeout=5.0  # 缩短到5秒，快速失败
         )
+        # 启用WAL模式以提高并发性能
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")  # 平衡性能和安全性
         conn.row_factory = sqlite3.Row  # 使用Row工厂，可以通过列名访问
         try:
             yield conn
@@ -333,26 +337,42 @@ class TaskDatabase:
             return None
     
     def load_all_tasks(self) -> List[Task]:
-        """从数据库加载所有任务"""
+        """从数据库加载所有任务（优化版本，添加超时和错误处理）"""
         tasks = []
         try:
             with self._get_connection() as conn:
                 cursor = conn.cursor()
+                # 使用索引优化查询
                 cursor.execute("SELECT * FROM tasks ORDER BY created_at DESC")
                 rows = cursor.fetchall()
                 
-                for row in rows:
+                logger.debug(f"Fetched {len(rows)} task rows from database")
+                
+                # 批量转换，添加错误处理
+                for idx, row in enumerate(rows):
                     try:
                         task = self._row_to_task(row)
                         if task:
                             tasks.append(task)
+                        # 每处理100个任务记录一次进度（避免日志过多）
+                        if (idx + 1) % 100 == 0:
+                            logger.debug(f"Processed {idx + 1}/{len(rows)} tasks")
                     except Exception as e:
-                        logger.warning(f"Failed to load task from row: {e}")
+                        logger.warning(f"Failed to load task from row {idx}: {e}")
                         continue
                 
-                logger.info(f"Loaded {len(tasks)} tasks from database")
+                logger.info(f"Loaded {len(tasks)} tasks from database (from {len(rows)} rows)")
+        except sqlite3.OperationalError as e:
+            logger.error(f"Database operational error: {e}", exc_info=True)
+            # 如果数据库被锁定，返回空列表而不是崩溃
+            if "locked" in str(e).lower():
+                logger.warning("Database is locked, returning empty task list")
+                return []
+            raise
         except Exception as e:
             logger.error(f"Failed to load tasks from database: {e}", exc_info=True)
+            # 发生错误时返回空列表，避免API完全失败
+            return []
         
         return tasks
     
@@ -414,6 +434,135 @@ class TaskDatabase:
             logger.error(f"Failed to get tasks by status {status}: {e}", exc_info=True)
         
         return tasks
+    
+    def load_tasks_with_filters(
+        self,
+        status: Optional[TaskStatus] = None,
+        robot_id: Optional[str] = None,
+        limit: Optional[int] = None,
+        offset: Optional[int] = None
+    ) -> List[Task]:
+        """
+        根据过滤条件加载任务（支持分页，优化性能）
+        
+        Args:
+            status: 任务状态过滤
+            robot_id: 机器人ID过滤
+            limit: 限制返回数量
+            offset: 偏移量
+            
+        Returns:
+            任务列表
+        """
+        tasks = []
+        try:
+            with self._get_connection() as conn:
+                cursor = conn.cursor()
+                
+                # 构建查询语句（使用WHERE子句在数据库层面过滤）
+                query = "SELECT * FROM tasks WHERE 1=1"
+                params = []
+                
+                if status:
+                    query += " AND status = ?"
+                    params.append(status.value)
+                
+                if robot_id:
+                    query += " AND robot_id = ?"
+                    params.append(robot_id)
+                
+                query += " ORDER BY created_at DESC"
+                
+                # 添加分页
+                if limit is not None:
+                    query += f" LIMIT {limit}"
+                    if offset is not None:
+                        query += f" OFFSET {offset}"
+                
+                # 执行查询（添加超时保护）
+                import time
+                start_time = time.time()
+                cursor.execute(query, params)
+                rows = cursor.fetchall()
+                query_time = time.time() - start_time
+                
+                logger.info(f"Fetched {len(rows)} task rows in {query_time:.2f}s (status={status}, robot_id={robot_id}, limit={limit}, offset={offset})")
+                
+                # 批量转换（优化：限制转换数量，避免转换过多任务导致超时）
+                max_rows_to_convert = limit if limit else 100  # 最多转换100个
+                rows_to_convert = rows[:max_rows_to_convert]
+                
+                convert_start = time.time()
+                for idx, row in enumerate(rows_to_convert):
+                    try:
+                        task = self._row_to_task(row)
+                        if task:
+                            tasks.append(task)
+                    except Exception as e:
+                        logger.warning(f"Failed to load task from row {idx}: {e}")
+                        continue
+                
+                convert_time = time.time() - convert_start
+                logger.info(f"Converted {len(tasks)} tasks in {convert_time:.2f}s")
+                
+                logger.debug(f"Loaded {len(tasks)} tasks with filters")
+        except sqlite3.OperationalError as e:
+            logger.error(f"Database operational error: {e}", exc_info=True)
+            if "locked" in str(e).lower():
+                logger.warning("Database is locked, returning empty task list")
+                return []
+            raise
+        except Exception as e:
+            logger.error(f"Failed to load tasks with filters: {e}", exc_info=True)
+            return []
+        
+        return tasks
+    
+    def count_tasks_with_filters(
+        self,
+        status: Optional[TaskStatus] = None,
+        robot_id: Optional[str] = None
+    ) -> int:
+        """
+        统计符合过滤条件的任务数量（快速查询，用于分页）
+        
+        Args:
+            status: 任务状态过滤
+            robot_id: 机器人ID过滤
+            
+        Returns:
+            任务总数
+        """
+        try:
+            with self._get_connection() as conn:
+                cursor = conn.cursor()
+                
+                # 构建查询语句
+                query = "SELECT COUNT(*) FROM tasks WHERE 1=1"
+                params = []
+                
+                if status:
+                    query += " AND status = ?"
+                    params.append(status.value)
+                
+                if robot_id:
+                    query += " AND robot_id = ?"
+                    params.append(robot_id)
+                
+                cursor.execute(query, params)
+                count = cursor.fetchone()[0]
+                
+                logger.debug(f"Counted {count} tasks with filters (status={status}, robot_id={robot_id})")
+                return count
+        except sqlite3.OperationalError as e:
+            logger.error(f"Database operational error in count: {e}", exc_info=True)
+            if "locked" in str(e).lower():
+                logger.warning("Database is locked, returning 0")
+                return 0
+            raise
+        except Exception as e:
+            logger.error(f"Failed to count tasks with filters: {e}", exc_info=True)
+            return 0
     
     def get_tasks_by_robot(self, robot_id: str) -> List[Task]:
         """根据机器人ID查询任务"""

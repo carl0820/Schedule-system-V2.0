@@ -337,3 +337,47 @@ http://10.160.128.150:1448/api/core/motion/v1/actions/4526
     "status": 4
   }
 }
+20.获取限行区域
+http://10.160.129.5:1448/api/core/artifact/v1/rectangle-areas/restricted_area
+响应：
+[
+  {
+    "area": {
+      "end": {
+        "x": 9.202170372009277,
+        "y": 0.3203727602958679
+      },
+      "half_width": 0.8999999761581421,
+      "start": {
+        "x": 7.1147379875183105,
+        "y": 0.29642894864082336
+      }
+    },
+    "id": 6,
+    "metadata": {
+      "restricted_robots_number_limit": "1",
+      "restricted_scheduling_points": "[]"
+    },
+    "usage": "restricted_area"
+  }
+]
+
+21. 获取绑定的充电桩
+http://10.160.129.5:1448/api/multi-floor/map/v1/homedocks/:current
+响应：
+{
+  "data": {
+    "building": "default",
+    "dock_name": "home_dock",
+    "floor": "1f",
+    "id": "home_dock",
+    "metadata": null,
+    "pose": {
+      "x": 16.694595336914062,
+      "y": -6.5539727210998535,
+      "yaw": 2.536832809448242
+    }
+  },
+  "msg": "",
+  "result": true
+}

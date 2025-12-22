@@ -8,7 +8,7 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Optional, Dict, Any
 from app.models.robot import (
     Pose, Speed, PowerStatus, HealthStatus, RobotInfo,
-    ActionState, POI, LaserScan, VirtualWall
+    ActionState, POI, LaserScan, VirtualWall, RestrictedArea
 )
 from app.services.network_detector import get_network_detector
 
@@ -481,6 +481,29 @@ class RobotAgent:
         data = await self._get("/api/core/slam/v1/localization/quality")
         return int(data) if isinstance(data, (int, float)) else data
     
+    async def get_home_dock_pose(self) -> Optional[Pose]:
+        """
+        获取绑定的充电桩坐标
+        
+        Returns:
+            充电桩位置，如果获取失败返回None
+        """
+        try:
+            data = await self._get("/api/multi-floor/map/v1/homedocks/:current")
+            if data and isinstance(data, dict):
+                # 检查响应格式
+                if "data" in data and isinstance(data["data"], dict):
+                    pose_data = data["data"].get("pose")
+                    if pose_data:
+                        return Pose(**pose_data)
+                # 如果data直接是pose数据
+                elif "pose" in data:
+                    return Pose(**data["pose"])
+            return None
+        except Exception as e:
+            logger.debug(f"Failed to get home dock pose for robot {self.robot_id}: {e}")
+            return None
+    
     async def get_imu(self) -> Dict[str, Any]:
         """获取IMU信息"""
         return await self._get("/api/core/slam/v1/imu")
@@ -759,6 +782,22 @@ class RobotAgent:
             return walls
         except Exception as e:
             logger.error(f"Get virtual walls failed for robot {self.robot_id} at {self.base_url}: {e}", exc_info=True)
+            raise
+    
+    async def get_restricted_areas(self) -> list[RestrictedArea]:
+        """获取所有限行区域"""
+        try:
+            logger.info(f"Fetching restricted areas from robot {self.robot_id} at {self.base_url}/api/core/artifact/v1/rectangle-areas/restricted_area")
+            data = await self._get("/api/core/artifact/v1/rectangle-areas/restricted_area")
+            logger.info(f"Robot {self.robot_id} at {self.base_url} restricted areas API returned {len(data) if isinstance(data, list) else 'non-list'} items")
+            if not isinstance(data, list):
+                logger.warning(f"Robot {self.robot_id} at {self.base_url} restricted areas API returned non-list data: {type(data)}")
+                return []
+            areas = [RestrictedArea(**item) for item in data]
+            logger.info(f"Robot {self.robot_id} at {self.base_url} successfully parsed {len(areas)} restricted areas")
+            return areas
+        except Exception as e:
+            logger.error(f"Get restricted areas failed for robot {self.robot_id} at {self.base_url}: {e}", exc_info=True)
             raise
     
     async def update_poi(self, poi_id: str, display_name: str) -> bool:

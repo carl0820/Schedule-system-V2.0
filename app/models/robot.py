@@ -110,6 +110,14 @@ class VirtualWall(BaseModel):
     metadata: Optional[Dict[str, Any]] = None
 
 
+class RestrictedArea(BaseModel):
+    """限行区域"""
+    id: int
+    area: Dict[str, Any]  # 包含 start, end, half_width
+    metadata: Optional[Dict[str, Any]] = None
+    usage: str  # 通常为 "restricted_area"
+
+
 class LaserScan(BaseModel):
     """激光雷达扫描数据"""
     pose: Pose

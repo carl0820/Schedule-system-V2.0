@@ -233,6 +233,48 @@
             color: #999;
             margin-top: 0.25rem;
         }
+        
+        .poi-checkbox-item {
+            padding: 0.75rem;
+            border-bottom: 0.5px solid rgba(0,0,0,0.1);
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        
+        .poi-checkbox-item:hover {
+            background: rgba(0,0,0,0.03);
+        }
+        
+        .poi-checkbox-item:last-child {
+            border-bottom: none;
+        }
+        
+        .poi-checkbox-item input[type="checkbox"] {
+            width: 18px;
+            height: 18px;
+            cursor: pointer;
+        }
+        
+        .poi-checkbox-item label {
+            flex: 1;
+            cursor: pointer;
+            display: flex;
+            flex-direction: column;
+            gap: 0.25rem;
+        }
+        
+        .poi-name {
+            font-weight: 500;
+            color: #000;
+        }
+        
+        .poi-position {
+            font-size: 0.8125rem;
+            color: #8E8E93;
+        }
     </style>
 </head>
 <body>
@@ -376,6 +418,35 @@
                 </div>
             </div>
             
+            <!-- POI等待点配置 -->
+            <div class="config-section">
+                <h2>POI等待点配置</h2>
+                <p>选择POI点作为限行区域的等待点</p>
+                
+                <div class="form-group">
+                    <label>启用POI等待点</label>
+                    <div class="description">是否优先使用POI等待点（推荐）</div>
+                    <label style="display: flex; align-items: center; gap: 0.5rem; margin-top: 0.5rem;">
+                        <input type="checkbox" id="use_poi_waiting_points" style="width: auto;">
+                        <span>启用POI等待点</span>
+                    </label>
+                    <div class="current-value" id="use_poi_waiting_points_current"></div>
+                </div>
+                
+                <div class="form-group">
+                    <label>选择POI等待点</label>
+                    <div class="description">从机器人POI中选择等待点（可多选）</div>
+                    <div id="poi_selection_container" style="margin-top: 0.5rem;">
+                        <div id="poi_loading" style="color: #8E8E93; font-size: 0.875rem;">正在加载POI列表...</div>
+                        <div id="poi_list" style="display: none; max-height: 300px; overflow-y: auto; border: 0.5px solid rgba(0,0,0,0.2); border-radius: 10px; padding: 0.5rem;">
+                            <!-- POI列表将在这里动态生成 -->
+                        </div>
+                        <div id="poi_error" style="display: none; color: #FF3B30; font-size: 0.875rem; margin-top: 0.5rem;"></div>
+                    </div>
+                    <div class="current-value" id="poi_waiting_points_current" style="margin-top: 0.5rem;"></div>
+                </div>
+            </div>
+            
             <div class="btn-group">
                 <button class="btn btn-primary" onclick="saveConfig()">保存配置</button>
                 <button class="btn btn-secondary" onclick="resetConfig()">重置为默认值</button>
@@ -409,10 +480,108 @@
         };
         let currentConfig = {};
         
+        let allPois = [];  // 存储所有POI列表
+        let selectedPoiNames = [];  // 存储已选择的POI名称列表
+        
         // 页面加载时获取配置
         window.onload = function() {
-            loadConfig();
+            // 先加载配置，然后加载POI列表（POI列表加载完成后会应用配置中的选择）
+            loadConfig().then(() => {
+                // 配置加载完成后再加载POI列表
+                loadPoiList();
+            }).catch(() => {
+                // 即使配置加载失败，也尝试加载POI列表
+                loadPoiList();
+            });
         };
+        
+        // 加载POI列表
+        async function loadPoiList() {
+            try {
+                const response = await fetch(`${API_BASE}/api/maps/pois`);
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                
+                const pois = await response.json();
+                allPois = pois;
+                
+                // 如果配置已加载，应用已保存的POI选择
+                if (currentConfig && currentConfig.poi_waiting_points && Array.isArray(currentConfig.poi_waiting_points)) {
+                    selectedPoiNames = [...currentConfig.poi_waiting_points];
+                    console.log('Applied saved POI waiting points after loading POI list:', selectedPoiNames);
+                }
+                
+                // 渲染POI列表（会使用selectedPoiNames来设置复选框状态）
+                renderPoiList();
+                updatePoiCurrentValue();
+                
+                document.getElementById('poi_loading').style.display = 'none';
+                document.getElementById('poi_list').style.display = 'block';
+            } catch (error) {
+                console.error('Failed to load POI list:', error);
+                document.getElementById('poi_loading').style.display = 'none';
+                document.getElementById('poi_error').style.display = 'block';
+                document.getElementById('poi_error').textContent = '加载POI列表失败: ' + error.message;
+            }
+        }
+        
+        // 渲染POI列表
+        function renderPoiList() {
+            const poiListContainer = document.getElementById('poi_list');
+            poiListContainer.innerHTML = '';
+            
+            if (allPois.length === 0) {
+                poiListContainer.innerHTML = '<div style="padding: 1rem; color: #8E8E93; text-align: center;">暂无POI点</div>';
+                return;
+            }
+            
+            allPois.forEach(poi => {
+                const poiItem = document.createElement('div');
+                poiItem.className = 'poi-checkbox-item';
+                
+                const checkbox = document.createElement('input');
+                checkbox.type = 'checkbox';
+                checkbox.value = poi.display_name || poi.id;
+                checkbox.checked = selectedPoiNames.includes(poi.display_name || poi.id);
+                checkbox.onchange = () => {
+                    if (checkbox.checked) {
+                        if (!selectedPoiNames.includes(checkbox.value)) {
+                            selectedPoiNames.push(checkbox.value);
+                        }
+                    } else {
+                        selectedPoiNames = selectedPoiNames.filter(name => name !== checkbox.value);
+                    }
+                    updatePoiCurrentValue();
+                };
+                
+                const label = document.createElement('label');
+                label.innerHTML = `
+                    <span class="poi-name">${poi.display_name || poi.id}</span>
+                    <span class="poi-position">位置: (${poi.pose.x.toFixed(2)}, ${poi.pose.y.toFixed(2)})</span>
+                `;
+                label.onclick = (e) => {
+                    e.preventDefault();
+                    checkbox.click();
+                };
+                
+                poiItem.appendChild(checkbox);
+                poiItem.appendChild(label);
+                poiListContainer.appendChild(poiItem);
+            });
+        }
+        
+        // 更新POI当前值显示
+        function updatePoiCurrentValue() {
+            const currentValueDiv = document.getElementById('poi_waiting_points_current');
+            if (selectedPoiNames.length > 0) {
+                currentValueDiv.textContent = `已选择: ${selectedPoiNames.join(', ')}`;
+                currentValueDiv.style.color = '#007AFF';
+            } else {
+                currentValueDiv.textContent = '未选择';
+                currentValueDiv.style.color = '#999';
+            }
+        }
         
         async function loadConfig() {
             try {
@@ -455,6 +624,8 @@
                 if (Object.keys(currentConfig).length === 0) {
                     populateForm({});
                 }
+                // 抛出错误，让调用者知道加载失败
+                throw error;
             }
         }
         
@@ -497,6 +668,37 @@
                     console.warn(`Input field not found: ${field}`);
                 }
             });
+            
+            // 填充POI等待点配置
+            const usePoiCheckbox = document.getElementById('use_poi_waiting_points');
+            const usePoiCurrentDiv = document.getElementById('use_poi_waiting_points_current');
+            if (usePoiCheckbox) {
+                if (config.use_poi_waiting_points !== undefined) {
+                    usePoiCheckbox.checked = config.use_poi_waiting_points;
+                    if (usePoiCurrentDiv) {
+                        usePoiCurrentDiv.textContent = `当前值: ${config.use_poi_waiting_points ? '启用' : '禁用'}`;
+                    }
+                } else {
+                    usePoiCheckbox.checked = true;  // 默认启用
+                    if (usePoiCurrentDiv) {
+                        usePoiCurrentDiv.textContent = '当前值: 启用（默认）';
+                    }
+                }
+            }
+            
+            // 填充已选择的POI等待点
+            if (config.poi_waiting_points && Array.isArray(config.poi_waiting_points) && config.poi_waiting_points.length > 0) {
+                selectedPoiNames = [...config.poi_waiting_points];  // 创建副本，避免引用问题
+                console.log('Loaded POI waiting points from config:', selectedPoiNames);
+                // 如果POI列表已加载，立即更新复选框状态
+                if (allPois.length > 0) {
+                    renderPoiList();
+                }
+            } else {
+                selectedPoiNames = [];
+                console.log('No POI waiting points in config');
+            }
+            updatePoiCurrentValue();
         }
         
         async function saveConfig() {
@@ -530,8 +732,24 @@
                     }
                 }
                 
+                // 添加POI等待点配置
+                const usePoiCheckbox = document.getElementById('use_poi_waiting_points');
+                if (usePoiCheckbox) {
+                    configUpdate.use_poi_waiting_points = usePoiCheckbox.checked;
+                }
+                
+                if (selectedPoiNames.length > 0) {
+                    configUpdate.poi_waiting_points = selectedPoiNames;
+                } else {
+                    // 如果没有选择POI，清空列表
+                    configUpdate.poi_waiting_points = [];
+                }
+                
                 // 验证数据
                 for (const [key, value] of Object.entries(configUpdate)) {
+                    if (key === 'poi_waiting_points' || key === 'use_poi_waiting_points') {
+                        continue;  // 跳过POI相关字段的数值验证
+                    }
                     if (isNaN(value) || value <= 0) {
                         throw new Error(`无效的值: ${key} = ${value}`);
                     }

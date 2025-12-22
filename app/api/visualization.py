@@ -88,6 +88,19 @@ async def get_visualization_data(
                             except Exception as e:
                                 logger.debug(f"Failed to auto-load virtual walls from robot {robot_id}: {e}")
                             
+                            # 自动加载限行区域信息
+                            try:
+                                areas = await asyncio.wait_for(
+                                    robot_agent.get_restricted_areas(),
+                                    timeout=3.0
+                                )
+                                map_manager.restricted_areas = [area.dict() for area in areas]
+                                logger.info(f"Auto-loaded {len(areas)} restricted areas from robot {robot_id}")
+                            except asyncio.TimeoutError:
+                                logger.debug(f"Timeout loading restricted areas from robot {robot_id} (3s), continuing without restricted areas")
+                            except Exception as e:
+                                logger.debug(f"Failed to auto-load restricted areas from robot {robot_id}: {e}")
+                            
                             # 重新获取地图信息
                             map_info = map_manager.get_map_info()
                             if map_info:
@@ -509,16 +522,16 @@ async def get_visualization_data(
         
         # 获取所有POI点（从所有机器人）- 使用并发处理，带超时控制
         async def get_robot_pois(robot_id: str):
-            """获取单个机器人的POI点（带超时）"""
+            """获取单个机器人的POI点（带超时，增加超时时间确保能获取到数据）"""
             try:
                 agent = robot_manager.get_robot_agent(robot_id)
                 if agent:
-                    # 添加超时控制，每个机器人最多等待1.5秒（减少超时时间）
+                    # 增加超时时间到2.5秒，确保能获取到POI数据
                     pois = await asyncio.wait_for(
                         agent.get_all_pois(),
-                        timeout=1.5
+                        timeout=2.5
                     )
-                    return [
+                    poi_list = [
                         {
                             "id": poi.id,
                             "display_name": poi.metadata.get("display_name", poi.id) if poi.metadata else poi.id,
@@ -531,22 +544,37 @@ async def get_visualization_data(
                         }
                         for poi in pois if poi.pose  # 只包含有位置的POI
                     ]
+                    logger.info(f"Fetched {len(poi_list)} POIs from robot {robot_id}")
+                    return poi_list
             except asyncio.TimeoutError:
-                logger.debug(f"Timeout getting POIs from robot {robot_id} (1.5s)")
+                logger.warning(f"Timeout getting POIs from robot {robot_id} (2.5s)")
                 return []
             except Exception as e:
-                logger.debug(f"Failed to get POIs for robot {robot_id}: {e}")
+                logger.warning(f"Failed to get POIs for robot {robot_id}: {e}")
                 return []
         
         # 并发获取所有POI点（即使某些机器人超时，也继续处理其他机器人）
         pois_data = []
         if robot_ids:
-            poi_tasks = [get_robot_pois(robot_id) for robot_id in robot_ids]
-            poi_results = await asyncio.gather(*poi_tasks, return_exceptions=True)
-            # 展平结果列表，过滤掉异常
-            for poi_list in poi_results:
-                if isinstance(poi_list, list):
-                    pois_data.extend(poi_list)
+            try:
+                # 设置总体超时为5秒，确保能获取到POI数据
+                poi_tasks = [get_robot_pois(robot_id) for robot_id in robot_ids]
+                poi_results = await asyncio.wait_for(
+                    asyncio.gather(*poi_tasks, return_exceptions=True),
+                    timeout=5.0
+                )
+                # 展平结果列表，过滤掉异常
+                for poi_list in poi_results:
+                    if isinstance(poi_list, list):
+                        pois_data.extend(poi_list)
+                logger.info(f"Successfully fetched {len(pois_data)} POIs from {len(robot_ids)} robots")
+            except asyncio.TimeoutError:
+                logger.warning("POI query timeout (5.0s), continuing with partial POI data")
+                # 即使超时，也尝试使用已获取的部分数据
+                if 'poi_results' in locals():
+                    for poi_list in poi_results:
+                        if isinstance(poi_list, list):
+                            pois_data.extend(poi_list)
         
         # 去重：按POI ID和位置去重（如果多个机器人有相同的POI）
         seen_pois = {}
@@ -558,6 +586,12 @@ async def get_visualization_data(
                 seen_pois[poi_key] = True
                 unique_pois.append(poi)
         pois_data = unique_pois
+        
+        # 确保POI数据不为空时记录日志
+        if pois_data:
+            logger.info(f"Final POI data: {len(pois_data)} unique POIs after deduplication")
+        else:
+            logger.warning("No POI data available after fetching from robots")
         
         # 获取虚拟墙信息（优先使用缓存，快速返回，不阻塞首页加载）
         virtual_walls = []
@@ -682,27 +716,174 @@ async def get_visualization_data(
         if not virtual_walls:
             virtual_walls = []
         
-        # 记录返回数据状态（使用debug级别，减少日志噪音）
-        logger.debug(
+        # 获取限行区域信息（优先使用缓存，快速返回，不阻塞首页加载）
+        restricted_areas = []
+        
+        # 检查缓存状态
+        has_areas_cache = hasattr(map_manager, 'restricted_areas')
+        areas_cache_size = len(map_manager.restricted_areas) if has_areas_cache and map_manager.restricted_areas else 0
+        logger.debug(f"Restricted areas cache check: has_cache={has_areas_cache}, cache_size={areas_cache_size}")
+        
+        # 总是尝试从所有在线机器人获取最新限行区域数据，合并所有限行区域
+        # 如果获取失败或超时，再使用缓存数据
+        should_fetch = True
+        fetch_success = False
+        all_fetched_areas = []  # 存储从所有机器人获取的限行区域
+        
+        if should_fetch:
+            logger.debug(f"Attempting to fetch restricted areas from all online robots")
+            robot_ids = robot_manager.list_robots()
+            if robot_ids:
+                # 并发从所有在线机器人获取限行区域
+                async def get_robot_areas_safe(robot_id: str):
+                    """安全地从单个机器人获取限行区域"""
+                    try:
+                        # 快速检查机器人是否在线
+                        robot_state = await asyncio.wait_for(
+                            robot_manager.get_robot_state(robot_id, force_update=False),
+                            timeout=0.3
+                        )
+                        if not robot_state or robot_state.status == RobotStatus.OFFLINE:
+                            logger.debug(f"Robot {robot_id} is offline, skipping")
+                            return []
+                    except (asyncio.TimeoutError, Exception):
+                        # 即使状态检查失败，也尝试获取（可能只是状态更新慢）
+                        pass
+                    
+                    try:
+                        robot_agent = robot_manager.get_robot_agent(robot_id)
+                        if robot_agent:
+                            robot_ip = getattr(robot_agent, 'base_url', 'unknown')
+                            logger.debug(f"Fetching restricted areas from robot {robot_id} at {robot_ip}")
+                            
+                            areas = await asyncio.wait_for(
+                                robot_agent.get_restricted_areas(),
+                                timeout=2.0
+                            )
+                            
+                            if areas and len(areas) > 0:
+                                logger.info(f"Received {len(areas)} restricted areas from robot {robot_id}")
+                                # 转换为字典格式
+                                result = []
+                                for area in areas:
+                                    try:
+                                        if hasattr(area, 'area') and area.area:
+                                            area_dict = area.area if isinstance(area.area, dict) else {}
+                                            if area_dict:
+                                                result.append({
+                                                    "id": area.id,
+                                                    "area": area_dict,
+                                                    "metadata": area.metadata if hasattr(area, 'metadata') else None,
+                                                    "usage": area.usage if hasattr(area, 'usage') else "restricted_area"
+                                                })
+                                    except Exception as e:
+                                        logger.debug(f"Error parsing restricted area from robot {robot_id}: {e}")
+                                return result
+                    except asyncio.TimeoutError:
+                        logger.debug(f"Timeout getting restricted areas from robot {robot_id} (2s)")
+                    except Exception as e:
+                        logger.debug(f"Failed to get restricted areas from robot {robot_id}: {e}")
+                    return []
+                
+                # 并发获取所有机器人的限行区域
+                area_tasks = [get_robot_areas_safe(robot_id) for robot_id in robot_ids]
+                area_results = await asyncio.gather(*area_tasks, return_exceptions=True)
+                
+                # 合并所有限行区域（按ID去重）
+                seen_ids = set()
+                for area_list in area_results:
+                    if isinstance(area_list, list):
+                        for area in area_list:
+                            area_id = area.get("id")
+                            if area_id is not None and area_id not in seen_ids:
+                                seen_ids.add(area_id)
+                                all_fetched_areas.append(area)
+                
+                if all_fetched_areas:
+                    logger.info(f"Merged {len(all_fetched_areas)} restricted areas from {len(robot_ids)} robots (unique IDs: {sorted(seen_ids)})")
+                    restricted_areas = all_fetched_areas
+                    # 更新缓存
+                    map_manager.restricted_areas = all_fetched_areas
+                    fetch_success = True
+        
+        # 如果获取失败且没有数据，尝试使用缓存数据作为后备
+        if not restricted_areas and has_areas_cache and map_manager.restricted_areas and len(map_manager.restricted_areas) > 0:
+            logger.debug(f"Failed to fetch restricted areas from robots, using {len(map_manager.restricted_areas)} cached areas")
+            for area in map_manager.restricted_areas:
+                area_data = area.get("area", {})
+                if area_data:
+                    restricted_areas.append({
+                        "id": area.get("id"),
+                        "area": area_data,
+                        "metadata": area.get("metadata"),
+                        "usage": area.get("usage", "restricted_area")
+                    })
+        
+        # 确保 restricted_areas 总是存在（即使是空数组）
+        if not restricted_areas:
+            restricted_areas = []
+        
+        # 记录返回数据状态（使用info级别，确保能看到限行区域数据）
+        logger.info(
             f"Returning visualization data: map_info={map_info is not None}, "
             f"{len(robots_data)} robots, {len(tasks_data)} tasks, {len(pois_data)} pois, "
-            f"{len(virtual_walls)} virtual walls"
+            f"{len(virtual_walls)} virtual walls, {len(restricted_areas)} restricted areas"
         )
+        if restricted_areas:
+            logger.info(f"Restricted areas details: {[{'id': a.get('id'), 'has_area': 'area' in a} for a in restricted_areas]}")
         
-        return {
+        # 获取等待点配置（用于前端显示）
+        waiting_points_config = []
+        try:
+            from app.services.config_manager import get_config_manager
+            config_manager = get_config_manager()
+            deadlock_config = config_manager.get_deadlock_config()
+            # 检查是否启用POI等待点（支持布尔值和数字1/0）
+            use_poi_waiting_points = deadlock_config.get("use_poi_waiting_points")
+            logger.info(f"Checking waiting points config: use_poi_waiting_points={use_poi_waiting_points}, type={type(use_poi_waiting_points)}")
+            
+            # 更宽松的检查：只要值不是False、0、None、"false"、"0"，就认为启用
+            if use_poi_waiting_points not in [False, 0, None, "0", "false", ""]:
+                poi_waiting_points = deadlock_config.get("poi_waiting_points", [])
+                logger.info(f"POI waiting points from config: {poi_waiting_points}, type={type(poi_waiting_points)}")
+                if poi_waiting_points and isinstance(poi_waiting_points, list) and len(poi_waiting_points) > 0:
+                    waiting_points_config = poi_waiting_points
+                    logger.info(f"Including {len(waiting_points_config)} waiting points in visualization data: {waiting_points_config}")
+                else:
+                    logger.warning(f"POI waiting points is empty or invalid: {poi_waiting_points}")
+            else:
+                logger.info(f"POI waiting points disabled: use_poi_waiting_points={use_poi_waiting_points}")
+        except Exception as e:
+            logger.error(f"Failed to get waiting points config: {e}", exc_info=True)
+        
+        # 确保POI数据总是存在（即使是空数组）
+        if not pois_data:
+            pois_data = []
+            logger.warning("No POI data available, returning empty array")
+        
+        result = {
             "map": {
                 "info": map_info,
                 "data": map_data
             },
             "robots": robots_data,
             "tasks": tasks_data,
-            "pois": pois_data,
-            "virtual_walls": virtual_walls
+            "pois": pois_data,  # 确保POI数据被包含
+            "virtual_walls": virtual_walls,
+            "restricted_areas": restricted_areas,
+            "waiting_points": waiting_points_config  # 等待点配置（POI名称列表）
         }
+        
+        # 记录最终返回的POI数量
+        logger.info(f"Returning {len(result['pois'])} POIs in visualization data")
+        
+        return result
     except Exception as e:
         logger.error(f"Failed to get visualization data: {e}", exc_info=True)
         # 即使出错，也尝试返回部分数据（如果有的话），避免完全失败
         try:
+            # 确保POI数据在异常情况下也返回（使用局部变量或空数组）
+            error_pois_data = pois_data if 'pois_data' in locals() else []
             # 获取虚拟墙信息（即使出错也尝试返回）
             virtual_walls = []
             if map_manager and hasattr(map_manager, 'virtual_walls') and map_manager.virtual_walls:
@@ -726,6 +907,23 @@ async def get_visualization_data(
             if not virtual_walls:
                 virtual_walls = []
             
+            # 获取限行区域信息（即使出错也尝试返回）
+            restricted_areas = []
+            if map_manager and hasattr(map_manager, 'restricted_areas') and map_manager.restricted_areas:
+                for area in map_manager.restricted_areas:
+                    area_data = area.get("area", {})
+                    if area_data:
+                        restricted_areas.append({
+                            "id": area.get("id"),
+                            "area": area_data,
+                            "metadata": area.get("metadata"),
+                            "usage": area.get("usage", "restricted_area")
+                        })
+            
+            # 确保 restricted_areas 总是存在（即使是空数组）
+            if not restricted_areas:
+                restricted_areas = []
+            
             return {
                 "map": {
                     "info": map_manager.get_map_info() if map_manager else None,
@@ -733,8 +931,10 @@ async def get_visualization_data(
                 },
                 "robots": robots_data if 'robots_data' in locals() else [],
                 "tasks": tasks_data if 'tasks_data' in locals() else [],
-                "pois": pois_data if 'pois_data' in locals() else [],
-                "virtual_walls": virtual_walls
+                "pois": error_pois_data if 'error_pois_data' in locals() else (pois_data if 'pois_data' in locals() else []),
+                "virtual_walls": virtual_walls,
+                "restricted_areas": restricted_areas,
+                "waiting_points": []  # 异常情况下返回空数组
             }
         except Exception:
             # 如果连部分数据都无法返回，抛出异常

@@ -90,12 +90,13 @@ class TaskScheduler:
         
         if deadlock_detector is None:
             from app.services.deadlock_detector import DeadlockDetector
-            # 传入任务调度器引用，让死锁检测器可以访问任务优先级
-            deadlock_detector = DeadlockDetector(robot_manager, collision_detector, path_planner, task_scheduler=self)
+            # 传入任务调度器引用和限行区域通行管理器，让死锁检测器可以访问任务优先级和限行区域管理
+            # 注意：限行区域通行管理器在下面初始化，所以这里需要延迟初始化死锁检测器
+            deadlock_detector = None  # 先设置为None，在限行区域通行管理器初始化后再创建
         else:
-            # 如果已经提供了死锁检测器，也设置任务调度器引用
+            # 如果已经提供了死锁检测器，也设置任务调度器引用和限行区域通行管理器
             deadlock_detector.task_scheduler = self
-        self.deadlock_detector = deadlock_detector
+        self._deadlock_detector_temp = deadlock_detector  # 临时保存
         
         # 启动碰撞检测和死锁检测任务
         self._collision_check_task: Optional[asyncio.Task] = None
@@ -117,6 +118,29 @@ class TaskScheduler:
         
         # 初始化优先级计算器
         self.priority_calculator = PriorityCalculator(robot_manager, path_planner)
+        
+        # 初始化限行区域通行管理器
+        from app.services.restricted_area_traffic_manager import RestrictedAreaTrafficManager
+        from app.services.config_manager import get_config_manager
+        from app.services.map_manager import get_map_manager
+        map_manager = get_map_manager()
+        config_manager = get_config_manager()
+        self.restricted_area_traffic_manager = RestrictedAreaTrafficManager(
+            map_manager, robot_manager, path_planner, config_manager, task_scheduler=self
+        )
+        # 注意：POI等待点将在异步上下文中加载（在_start_background_tasks_if_needed_async中）
+        
+        # 现在初始化死锁检测器（传入限行区域通行管理器）
+        if self._deadlock_detector_temp is None:
+            from app.services.deadlock_detector import DeadlockDetector
+            self.deadlock_detector = DeadlockDetector(
+                robot_manager, collision_detector, path_planner, task_scheduler=self,
+                restricted_area_traffic_manager=self.restricted_area_traffic_manager
+            )
+        else:
+            self.deadlock_detector = self._deadlock_detector_temp
+            # 设置限行区域通行管理器引用
+            self.deadlock_detector.restricted_area_traffic_manager = self.restricted_area_traffic_manager
         
         # 如果加载的任务中有执行中的任务，启动后台任务（死锁检测、碰撞检测等）
         self._start_background_tasks_if_needed()
@@ -149,6 +173,14 @@ class TaskScheduler:
         
         if has_executing_tasks or getattr(self, '_need_start_background_tasks', False):
             logger.info(f"Found {executing_count} executing/assigned tasks, starting background tasks...")
+            
+            # 加载POI等待点（在启动后台任务时加载）
+            try:
+                await self.restricted_area_traffic_manager.load_poi_waiting_points()
+                logger.info("POI waiting points loaded successfully")
+            except Exception as e:
+                logger.warning(f"Failed to load POI waiting points: {e}")
+            
             # 启动调度器
             if self._scheduler_task is None or (self._scheduler_task and self._scheduler_task.done()):
                 logger.info("Starting scheduler loop...")
@@ -159,18 +191,48 @@ class TaskScheduler:
                 logger.info("Starting collision check loop...")
                 self._collision_check_task = asyncio.create_task(self._collision_check_loop())
             
-            # 启动死锁检测任务
-            # 禁用死锁检测循环（临时禁用，专注于修复多动作任务）
-            # if self._deadlock_check_task is None or (self._deadlock_check_task and self._deadlock_check_task.done()):
-            #     logger.info("Starting deadlock check loop...")
-            #     try:
-            #         self._deadlock_check_task = asyncio.create_task(self._deadlock_check_loop())
-            #         logger.info("Deadlock check loop started successfully")
-            #     except Exception as e:
-            #         logger.error(f"Failed to start deadlock check loop: {e}", exc_info=True)
-            # else:
-            #     logger.info(f"Deadlock check loop already running (task state: done={self._deadlock_check_task.done()})")
-            logger.info("Deadlock detection disabled - focusing on multi-action task fixes")
+            # 启动死锁检测任务（限行区域死锁需要检测）
+            if self._deadlock_check_task is None or (self._deadlock_check_task and self._deadlock_check_task.done()):
+                logger.info("Starting deadlock check loop...")
+                try:
+                    self._deadlock_check_task = asyncio.create_task(self._deadlock_check_loop())
+                    logger.info("Deadlock check loop started successfully")
+                except Exception as e:
+                    logger.error(f"Failed to start deadlock check loop: {e}", exc_info=True)
+            else:
+                logger.info(f"Deadlock check loop already running (task state: done={self._deadlock_check_task.done()})")
+            
+            # 服务启动时强制解锁当前卡在限行区域的机器人
+            async def force_unlock_stuck_robots():
+                try:
+                    await asyncio.sleep(2.0)  # 等待2秒，确保机器人状态已加载
+                    logger.info("[STARTUP] Checking for stuck robots in restricted areas and forcing unlock...")
+                    
+                    # 强制检查并解锁所有限行区域的阻塞（使用force_unlock=True立即解锁）
+                    await self.restricted_area_traffic_manager._check_and_resolve_capacity_overflow(force_unlock=True)
+                    await self.restricted_area_traffic_manager._check_direct_blocking_in_restricted_area(force_unlock=True)
+                    await self.restricted_area_traffic_manager._check_stuck_robots_in_restricted_area(force_unlock=True)
+                    
+                    # 强制清除所有等待状态，让机器人继续执行任务
+                    waiting_robots = list(self.restricted_area_traffic_manager.robot_waiting_status.keys())
+                    if waiting_robots:
+                        logger.warning(
+                            f"[STARTUP] Found {len(waiting_robots)} robots in waiting status: {waiting_robots}. "
+                            f"Clearing waiting status to allow task continuation..."
+                        )
+                        for robot_id in waiting_robots:
+                            if robot_id in self.restricted_area_traffic_manager.robot_waiting_status:
+                                del self.restricted_area_traffic_manager.robot_waiting_status[robot_id]
+                    
+                    # 强制触发容量检查，让等待的机器人可以通行
+                    await self.restricted_area_traffic_manager.check_waiting_robots()
+                    
+                    logger.info("[STARTUP] Force unlock completed")
+                except Exception as e:
+                    logger.error(f"[STARTUP] Failed to force unlock stuck robots: {e}", exc_info=True)
+            
+            # 在后台执行强制解锁
+            asyncio.create_task(force_unlock_stuck_robots())
             
             logger.info(f"Background tasks started for {executing_count} existing executing tasks")
             self._need_start_background_tasks = False
@@ -369,7 +431,7 @@ class TaskScheduler:
         try:
             # 快速检查是否有可用机器人（使用缓存状态，不查询）
             quick_available = []
-            for robot_id in self.robot_manager.list_robots():
+            for robot_id in self.robot_manager.list_available_robots():
                 cached_state = self.robot_manager.robot_states.get(robot_id)
                 if cached_state and cached_state.status == RobotStatus.IDLE:
                     # 检查是否有活跃任务
@@ -422,11 +484,22 @@ class TaskScheduler:
                                 logger.info(f"Quick assignment: task {task_id} to robot {best_robot_id} (cost: {best_cost:.2f}m)")
                                 # 在后台异步分配，不阻塞任务创建
                                 asyncio.create_task(self._assign_task_with_lock(task, best_robot_id))
+                                
+                                # 立即触发调度检查，确保任务快速分配
+                                if self._scheduler_event is not None:
+                                    self._scheduler_event.set()
                             else:
                                 logger.debug(f"Robot {best_robot_id} has active task, skipping quick assignment for task {task_id}")
                     
                     # 异步尝试快速分配
                     asyncio.create_task(try_quick_assign())
+                    
+                    # 立即触发调度检查（即使快速分配失败，也要触发调度）
+                    if self._scheduler_event is not None:
+                        self._scheduler_event.set()
+                    else:
+                        self._scheduler_event = asyncio.Event()
+                        self._scheduler_event.set()
         except Exception as e:
             logger.debug(f"Quick assignment failed for task {task_id}: {e}, will use normal scheduler")
         
@@ -444,7 +517,12 @@ class TaskScheduler:
         #     self._deadlock_check_task = asyncio.create_task(self._deadlock_check_loop())
         # else:
         #     logger.debug("Deadlock check loop already running")
-        logger.debug("Deadlock detection disabled - focusing on multi-action task fixes")
+        # 启用死锁检测循环（限行区域死锁需要检测）
+        if self._deadlock_check_task is None or self._deadlock_check_task.done():
+            logger.info("Starting deadlock check loop...")
+            self._deadlock_check_task = asyncio.create_task(self._deadlock_check_loop())
+        else:
+            logger.debug("Deadlock check loop already running")
         
         elapsed_time = time.time() - start_time
         logger.info(f"Task {task_id} created: target=({task_create.target_pose.x}, {task_create.target_pose.y}), status={task.status.value}, elapsed={elapsed_time:.3f}s")
@@ -487,19 +565,26 @@ class TaskScheduler:
         
         # 确定目标位置（使用最后一个移动动作的目标位置，用于显示）
         target_pose = None
-        # 从后往前查找最后一个移动动作
-        for action in reversed(task_create.actions):
-            if action.action_type == ActionType.MOVE_TO:
-                if action.target_pose:
-                    target_pose = action.target_pose
-                    break
-                elif action.poi_name:
-                    # POI导航：使用默认位置，任务分配时再获取实际位置
-                    # 注意：这里设置为(0,0,0)，但会在任务列表API中通过POI解析获取实际坐标
-                    target_pose = Pose(x=0.0, y=0.0, yaw=0.0)
-                    break
+        last_action = task_create.actions[-1] if task_create.actions else None
         
-        # 如果没有移动动作，使用默认目标位置（用于兼容）
+        # 如果最后一个动作是GO_HOME，使用充电桩坐标（通常是原点(0,0,0)）
+        if last_action and last_action.action_type == ActionType.GO_HOME:
+            # GO_HOME动作的目标是充电桩，通常位于原点(0,0,0)
+            # 注意：实际充电桩坐标可能因机器人而异，但通常都是原点
+            target_pose = Pose(x=0.0, y=0.0, yaw=0.0)
+        else:
+            # 从后往前查找最后一个移动动作（排除GO_HOME，因为GO_HOME不是目标点）
+            for action in reversed(task_create.actions):
+                if action.action_type == ActionType.MOVE_TO:
+                    if action.target_pose:
+                        target_pose = action.target_pose
+                        break
+                    elif action.poi_name:
+                        # POI瀵艰埅锛氫娇鐢ㄩ粯璁や綅缃紝浠诲姟鍒嗛厤鏃跺啀鑾峰彇瀹為檯浣嶇疆
+                        # 娉ㄦ剰锛氳繖閲岃缃负(0,0,0)锛屼絾浼氬湪浠诲姟鍒楄〃API涓€氳繃POI瑙ｆ瀽鑾峰彇瀹為檯鍧愭爣
+                        target_pose = Pose(x=0.0, y=0.0, yaw=0.0)
+                        break
+        # 如果没有移动动作且最后一个动作不是GO_HOME，使用默认目标位置（用于兼容）
         if target_pose is None:
             target_pose = Pose(x=0.0, y=0.0, yaw=0.0)
         
@@ -563,13 +648,12 @@ class TaskScheduler:
                     logger.debug("Collision check loop already running")
                 
                 # 启动死锁检测任务（如果还没有启动或已停止）
-                # 禁用死锁检测循环（临时禁用，专注于修复多动作任务）
-                # if self._deadlock_check_task is None or self._deadlock_check_task.done():
-                #     logger.info("Starting deadlock check loop...")
-                #     self._deadlock_check_task = asyncio.create_task(self._deadlock_check_loop())
-                # else:
-                #     logger.debug("Deadlock check loop already running")
-                logger.debug("Deadlock detection disabled - focusing on multi-action task fixes")
+                # 启用死锁检测循环（限行区域死锁需要检测）
+                if self._deadlock_check_task is None or self._deadlock_check_task.done():
+                    logger.info("Starting deadlock check loop...")
+                    self._deadlock_check_task = asyncio.create_task(self._deadlock_check_loop())
+                else:
+                    logger.debug("Deadlock check loop already running")
             except Exception as e:
                 logger.error(f"Error in async post-creation tasks for task {task_id}: {e}", exc_info=True)
         
@@ -603,29 +687,48 @@ class TaskScheduler:
     async def list_tasks(
         self,
         status: Optional[TaskStatus] = None,
-        robot_id: Optional[str] = None
+        robot_id: Optional[str] = None,
+        limit: Optional[int] = None,
+        offset: Optional[int] = None
     ) -> List[Task]:
         """
-        获取任务列表（从数据库读取，确保数据一致性）
+        获取任务列表（从数据库读取，确保数据一致性，支持分页）
+        
+        Args:
+            status: 任务状态过滤
+            robot_id: 机器人ID过滤
+            limit: 限制返回数量（用于分页）
+            offset: 偏移量（用于分页）
+            
+        Returns:
+            任务列表
+        """
+        # 使用数据库层面的分页和过滤，避免加载所有任务
+        tasks = self.task_db.load_tasks_with_filters(
+            status=status,
+            robot_id=robot_id,
+            limit=limit,
+            offset=offset
+        )
+        
+        return tasks
+    
+    async def count_tasks(
+        self,
+        status: Optional[TaskStatus] = None,
+        robot_id: Optional[str] = None
+    ) -> int:
+        """
+        统计任务数量（用于分页）
         
         Args:
             status: 任务状态过滤
             robot_id: 机器人ID过滤
             
         Returns:
-            任务列表
+            任务总数
         """
-        # 从数据库读取任务，确保数据一致性（即使数据库中的任务被删除，也能正确反映）
-        tasks = self.task_db.load_all_tasks()
-        
-        # 应用过滤条件
-        if status:
-            tasks = [t for t in tasks if t.status == status]
-        
-        if robot_id:
-            tasks = [t for t in tasks if t.robot_id == robot_id]
-        
-        return tasks
+        return self.task_db.count_tasks_with_filters(status=status, robot_id=robot_id)
     
     async def cancel_task(self, task_id: str) -> bool:
         """
@@ -703,10 +806,10 @@ class TaskScheduler:
             try:
                 loop_count += 1
                 
-                # 等待事件触发或超时（0.05秒），实现立即响应和定期检查
+                # 等待事件触发或超时（0.01秒），实现立即响应和定期检查
                 # 进一步减少超时时间，更快响应新任务
                 try:
-                    await asyncio.wait_for(self._scheduler_event.wait(), timeout=0.05)
+                    await asyncio.wait_for(self._scheduler_event.wait(), timeout=0.01)
                     self._scheduler_event.clear()  # 清除事件标志
                     logger.debug("Scheduler triggered by event (new task created)")
                 except asyncio.TimeoutError:
@@ -759,9 +862,10 @@ class TaskScheduler:
                 
                 # 查找空闲的机器人（优化：优先使用缓存状态，只查询在线机器人）
                 available_robots = []
-                robot_ids = self.robot_manager.list_robots()
+                # 只获取可用的机器人（排除停用的机器人）
+                robot_ids = self.robot_manager.list_available_robots()
                 if pending_tasks:
-                    logger.info(f"Scheduler loop: checking {len(robot_ids)} robots, {len(pending_tasks)} pending tasks")
+                    logger.info(f"Scheduler loop: checking {len(robot_ids)} available robots, {len(pending_tasks)} pending tasks")
                 else:
                     # 没有待分配任务，减少日志输出
                     if loop_count % 20 == 0:
@@ -822,6 +926,11 @@ class TaskScheduler:
                         # 注意：只有空闲状态的机器人才能参与调度
                         # 忙碌的机器人需要完成任务恢复到空闲状态才能参与调度
                         if state.status == RobotStatus.IDLE:
+                            # 检查机器人是否被停用
+                            if self.robot_manager.is_robot_disabled(robot_id):
+                                logger.info(f"Robot {robot_id} is disabled, skipping task assignment")
+                                continue
+                            
                             # 检查机器人是否有故障（hasError、hasFatal或baseError不为空）- 有故障的机器人不参与调度
                             # 注意：errorCode为17041920或17042176的错误不影响使用，需要过滤掉
                             has_error = False
@@ -872,16 +981,18 @@ class TaskScheduler:
                                 )
                                 continue
                             
-                            is_obstacle = self.path_planner.map_manager.is_obstacle(
-                                state.pose.x, state.pose.y
-                            )
-                            if is_obstacle:
-                                logger.warning(
-                                    f"Robot {robot_id} is in obstacle area "
-                                    f"({state.pose.x:.2f}, {state.pose.y:.2f}), "
-                                    f"skipping task assignment"
+                            # 检查机器人当前位置是否为障碍物（被人为推到障碍物区域）
+                            if self.path_planner:
+                                is_obstacle = self.path_planner.map_manager.is_obstacle(
+                                    state.pose.x, state.pose.y
                                 )
-                                continue
+                                if is_obstacle:
+                                    logger.warning(
+                                        f"Robot {robot_id} is in obstacle area "
+                                        f"({state.pose.x:.2f}, {state.pose.y:.2f}), "
+                                        f"skipping task assignment"
+                                    )
+                                    continue
                             
                             # 所有条件都满足，机器人可以参与调度
                             available_robots.append((robot_id, state))
@@ -892,12 +1003,6 @@ class TaskScheduler:
                                     f"(battery: {battery_percentage}%, "
                                     f"position: ({state.pose.x:.2f}, {state.pose.y:.2f}))"
                                 )
-                        else:
-                            # 非IDLE状态的机器人不参与调度（包括BUSY状态）
-                            if state.status == RobotStatus.BUSY:
-                                logger.debug(f"Robot {robot_id} is busy, must complete task and return to idle before assignment")
-                            else:
-                                logger.debug(f"Robot {robot_id} is not idle (status: {state.status.value}), skipping")
                     else:
                         logger.warning(f"Robot {robot_id} state is None, skipping")
                 
@@ -980,7 +1085,7 @@ class TaskScheduler:
                         if self._scheduler_event.is_set():
                             self._scheduler_event.clear()
                             continue  # 立即继续循环，处理新任务
-                        await asyncio.sleep(0.1)  # 减少等待时间到0.1秒，更快响应
+                        await asyncio.sleep(0.05)  # 减少等待时间到0.05秒，更快响应
                         continue
                 
                 # 更新执行中的任务状态（在分配新任务之前）
@@ -1299,6 +1404,7 @@ class TaskScheduler:
                 logger.warning(f"Failed to check current action for robot {robot_id}: {e}, continuing with assignment")
             
             # 获取机器人当前位置，设置为任务的起始位置
+            robot_state = None
             try:
                 robot_state = await self.robot_manager.get_robot_state(robot_id)
                 if robot_state and robot_state.pose:
@@ -1310,11 +1416,94 @@ class TaskScheduler:
             except Exception as e:
                 logger.warning(f"Failed to get robot {robot_id} position for start_pose: {e}")
             
+            # 检查限行区域通行（如果机器人在限行区域内或接近限行区域）
+            if robot_state and robot_state.pose:
+                try:
+                    # 获取任务优先级（值越小优先级越高）
+                    task_priority_value = task.priority.value  # TaskPriority枚举值：1-4
+                    # 转换为数值（值越小优先级越高，用于限行区域管理器）
+                    priority_for_traffic = float(task_priority_value)
+                    
+                    # 检查限行区域通行
+                    can_pass, waiting_point, error = await self.restricted_area_traffic_manager.check_and_manage_traffic(
+                        robot_id, robot_state.pose, priority_for_traffic, task.task_id
+                    )
+                    
+                    if not can_pass:
+                        if waiting_point:
+                            # 需要移动到等待点
+                            logger.info(
+                                f"[RESTRICTED AREA] Robot {robot_id} needs to wait at waiting point "
+                                f"({waiting_point.x:.2f}, {waiting_point.y:.2f}) before executing task {task.task_id}"
+                            )
+                            
+                            # 标记任务为已分配，但状态保持ASSIGNED（等待通行）
+                            task.robot_id = robot_id
+                            task.status = TaskStatus.ASSIGNED
+                            task.assigned_at = datetime.now()
+                            task.retry_count = 0
+                            self._save_tasks_to_file()
+                            
+                            # 移动到等待点
+                            try:
+                                action_state = await agent.move_to(
+                                    target=waiting_point,
+                                    mode=0,
+                                    acceptable_precision=0.5,  # 等待点精度可以放宽
+                                    speed_ratio=1.0
+                                )
+                                task.action_id = action_state.action_id
+                                logger.info(
+                                    f"[RESTRICTED AREA] Robot {robot_id} moving to waiting point, "
+                                    f"action_id={action_state.action_id}"
+                                )
+                                self._save_tasks_to_file()
+                                return  # 等待到达等待点后再继续执行任务
+                            except Exception as e:
+                                logger.error(
+                                    f"[RESTRICTED AREA] Failed to move robot {robot_id} to waiting point: {e}",
+                                    exc_info=True
+                                )
+                                # 如果移动到等待点失败，继续尝试执行任务（可能限行区域已释放）
+                        else:
+                            logger.error(
+                                f"[RESTRICTED AREA] Robot {robot_id} cannot pass restricted area: {error}"
+                            )
+                            # 如果无法找到等待点，继续尝试执行任务（可能限行区域已释放）
+                except Exception as e:
+                    logger.warning(
+                        f"[RESTRICTED AREA] Failed to check restricted area traffic for robot {robot_id}: {e}",
+                        exc_info=True
+                    )
+                    # 如果检查失败，继续执行任务（不阻塞）
+            
             # 先标记任务为已分配，避免在同一个调度循环中重复分配
             task.robot_id = robot_id
             task.status = TaskStatus.ASSIGNED
             task.assigned_at = datetime.now()
             task.retry_count = 0  # 重置重试计数
+            
+            # 如果是多动作任务且最后一个动作是GO_HOME，尝试获取充电桩的实际坐标
+            if task.is_multi_action and task.actions:
+                last_action = task.actions[-1]
+                if last_action.action_type == ActionType.GO_HOME:
+                    try:
+                        dock_pose = await agent.get_home_dock_pose()
+                        if dock_pose:
+                            # 更新target_pose为充电桩的实际坐标
+                            task.target_pose = dock_pose
+                            logger.info(
+                                f"Task {task.task_id} GO_HOME: updated target_pose to actual dock pose "
+                                f"({dock_pose.x:.2f}, {dock_pose.y:.2f}, {dock_pose.yaw:.2f}) for robot {robot_id}"
+                            )
+                        else:
+                            logger.debug(
+                                f"Task {task.task_id} GO_HOME: could not get dock pose for robot {robot_id}, "
+                                f"using default (0,0,0)"
+                            )
+                    except Exception as e:
+                        logger.debug(f"Failed to get home dock pose for robot {robot_id}: {e}")
+            
             # 立即保存，确保状态更新
             self._save_tasks_to_file()
             logger.info(
@@ -1451,6 +1640,18 @@ class TaskScheduler:
         while True:
             try:
                 loop_count += 1
+                
+                # 首先检查是否有执行中的任务，如果没有就直接跳过检测，避免在没有任务时仍然运行
+                executing_count = len([
+                    t for t in self.tasks.values()
+                    if t.status.value in ["EXECUTING", "ASSIGNED"]
+                ])
+                
+                if executing_count == 0:
+                    # 没有执行中的任务，跳过死锁检测和阻塞检查
+                    await asyncio.sleep(0.5)
+                    continue
+                
                 # 每20次循环（10秒）记录一次运行状态
                 if loop_count % 20 == 0:
                     deadlock_logger.debug(f"Deadlock check loop running (iteration {loop_count})")
@@ -1460,10 +1661,6 @@ class TaskScheduler:
                 
                 # 记录检测结果（用于验证）
                 robot_ids = self.robot_manager.list_robots()
-                executing_count = len([
-                    t for t in self.tasks.values()
-                    if t.status.value in ["EXECUTING", "ASSIGNED"]
-                ])
                 
                 # 每10次循环（5秒）记录一次检测状态（INFO级别，确保能看到）
                 if loop_count % 10 == 0:
@@ -1492,12 +1689,16 @@ class TaskScheduler:
                     
                     # 根据死锁类型使用不同的阈值
                     threshold = self.deadlock_detector.deadlock_threshold  # 默认阈值
-                    if deadlock.deadlock_type == "narrow_passage":
+                    if deadlock.deadlock_type == "restricted_area":
+                        # 限行区域死锁：立即触发解决（阈值为0），因为容量溢出需要立即处理
+                        threshold = 0.0
+                    elif deadlock.deadlock_type == "narrow_passage":
                         threshold = self.deadlock_detector.narrow_passage_deadlock_threshold
                     elif deadlock.deadlock_type == "circular_wait":
                         threshold = self.deadlock_detector.circular_wait_deadlock_threshold
                     elif deadlock.deadlock_type == "mutual_blocking":
-                        threshold = self.deadlock_detector.mutual_blocking_deadlock_threshold
+                        # mutual_blocking死锁：立即触发解决（阈值为0），因为相互阻塞需要立即处理
+                        threshold = 0.0
                     elif deadlock.deadlock_type == "resource_contention":
                         # 资源竞争（单个机器人卡住）使用较短的阈值
                         threshold = 5.0  # 5秒后认为卡住
@@ -1544,8 +1745,8 @@ class TaskScheduler:
                 # 检测已完成任务的机器人是否阻塞了执行中任务的路径（提高检测频率）
                 await self._check_completed_task_blocking()
                 
-                # 等待0.5秒后再次检测（提高响应速度，更快检测阻塞）
-                await asyncio.sleep(0.5)
+                # 减少等待时间，提高响应速度（更快检测阻塞）
+                await asyncio.sleep(0.2)
                 
             except Exception as e:
                 logger.error(f"Error in deadlock check loop: {e}", exc_info=True)
@@ -1558,12 +1759,9 @@ class TaskScheduler:
     async def _check_and_resume_deadlock_resolution_tasks(self):
         """
         检查是否有机器人已完成死锁解除避让，需要恢复任务
-        （已禁用：临时禁用死锁检测，专注于修复多动作任务）
         """
-        # 临时禁用死锁恢复逻辑
-        return
-        # if not self.robots_in_deadlock_resolution:
-        #     return
+        if not self.robots_in_deadlock_resolution:
+            return
         
         now = datetime.now()
         robots_to_remove = []
@@ -1661,6 +1859,533 @@ class TaskScheduler:
         for robot_id in robots_to_remove:
             self.robots_in_deadlock_resolution.pop(robot_id, None)
     
+    async def _release_robot_from_restricted_area_on_completion(self, task: Task):
+        """
+        任务完成时释放机器人在限行区域的占用
+        
+        Args:
+            task: 已完成的任务
+        """
+        if not task.robot_id:
+            return
+        
+        try:
+            robot_state = await self.robot_manager.get_robot_state(task.robot_id, force_update=False)
+            if robot_state and robot_state.pose:
+                # 检查机器人是否在限行区域内
+                restricted_areas = self.map_manager.restricted_areas
+                for area in restricted_areas:
+                    area_id = area.get("id")
+                    area_data = area.get("area", {})
+                    if area_data:
+                        start = area_data.get("start", {})
+                        end = area_data.get("end", {})
+                        half_width = area_data.get("half_width", 0.5)
+                        if start and end:
+                            if self.restricted_area_traffic_manager.is_point_in_restricted_area(
+                                robot_state.pose, start, end, half_width
+                            ):
+                                await self.restricted_area_traffic_manager.release_robot_from_area(
+                                    task.robot_id, area_id
+                                )
+                                logger.info(
+                                    f"[RESTRICTED AREA] Released robot {task.robot_id} from restricted area {area_id} "
+                                    f"after task {task.task_id} completion"
+                                )
+                                break
+        except Exception as e:
+            logger.debug(f"Failed to release robot {task.robot_id} from restricted area: {e}")
+    
+    async def _check_and_resume_waiting_robots(self):
+        """
+        检查等待限行区域通行的机器人是否可以恢复任务
+        
+        当限行区域有空位时，等待的机器人可以继续执行任务
+        
+        注意：不仅要检查waiting_status中的机器人，还要检查所有执行中的任务，
+        看看是否有机器人在等待点，并且已经在通行列表中（可能等待状态已被check_waiting_robots清除）
+        """
+        waiting_status = self.restricted_area_traffic_manager.robot_waiting_status
+        
+        robots_to_resume = []
+        robots_to_resume_set = set()  # 用于避免重复添加
+        
+        # 首先检查所有执行中的任务，看看是否有机器人在通行列表中，但没有action_id
+        # 这可以处理check_waiting_robots已经将机器人移到通行列表，但等待状态已被清除的情况
+        logger.info(f"[RESTRICTED AREA] Checking {len(self.tasks)} tasks for robots in traffic list")
+        for task_id, task in list(self.tasks.items()):
+            if task.status not in [TaskStatus.EXECUTING, TaskStatus.ASSIGNED]:
+                logger.debug(f"[RESTRICTED AREA] Task {task_id} status={task.status.value}, skipping")
+                continue
+            if not task.robot_id:
+                continue
+            
+            robot_id = task.robot_id
+            # 检查机器人是否在某个限行区域的通行列表中
+            for area_id, traffic in self.restricted_area_traffic_manager.area_traffic.items():
+                if robot_id in traffic['robots']:
+                    logger.info(
+                        f"[RESTRICTED AREA] Robot {robot_id} is in traffic list for area {area_id}, "
+                        f"task {task_id} status={task.status.value}, action_id={task.action_id}, "
+                        f"in_waiting_status={robot_id in waiting_status}, "
+                        f"is_multi_action={task.is_multi_action if hasattr(task, 'is_multi_action') else False}, "
+                        f"current_action_index={task.current_action_index if hasattr(task, 'current_action_index') else None}"
+                    )
+                    # 机器人已经在通行列表中
+                    # 如果任务没有action_id，或者action_id对应的action已经完成/aborted，应该恢复任务
+                    should_resume = False
+                    if not task.action_id:
+                        # 任务没有action_id，说明可能正在等待限行区域释放
+                        should_resume = True
+                        reason = "task has no action_id"
+                    else:
+                        # 检查action_id对应的action是否已经完成/aborted
+                        try:
+                            agent = self.robot_manager.get_robot_agent(robot_id)
+                            if agent:
+                                action_state = await agent.get_action_status(task.action_id)
+                                if action_state:
+                                    status = action_state.state.get("status") if action_state.state else action_state.status
+                                    result = action_state.state.get("result") if action_state.state else action_state.result
+                                    # 如果action已经完成（status=4）或aborted（result=-2），应该恢复任务
+                                    if status == 4 or result == -2:
+                                        should_resume = True
+                                        reason = f"action {task.action_id} is done (status={status}, result={result})"
+                        except Exception as e:
+                            logger.debug(f"Failed to check action status for task {task_id}: {e}")
+                            # 如果无法检查action状态，但机器人不在等待状态中，也尝试恢复任务
+                            if robot_id not in waiting_status:
+                                should_resume = True
+                                reason = "cannot check action status and robot not in waiting status"
+                    
+                    if should_resume:
+                        # 机器人已经在通行列表中，但不在等待状态中，或者action已经完成/aborted
+                        # 说明check_waiting_robots已经将机器人移到通行列表，但任务还没有恢复
+                        # 重要：即使机器人还在waiting_status中，只要在通行列表中且任务没有action_id，也应该恢复任务
+                        # 因为check_waiting_robots已经将机器人移到了通行列表，说明限行区域已经释放
+                        if robot_id not in waiting_status:
+                            if (robot_id, task_id) not in robots_to_resume_set:
+                                logger.info(
+                                    f"[RESTRICTED AREA] Robot {robot_id} is in traffic list for area {area_id} "
+                                    f"and {reason}. Resuming task {task_id}."
+                                )
+                                robots_to_resume.append((robot_id, task_id, task))
+                                robots_to_resume_set.add((robot_id, task_id))
+                        else:
+                            # 机器人还在waiting_status中，但已经在通行列表中
+                            # 说明check_waiting_robots已经将机器人移到了通行列表，但waiting_status可能还没有清除
+                            # 这种情况下，也应该恢复任务，并清除waiting_status
+                            if (robot_id, task_id) not in robots_to_resume_set:
+                                logger.info(
+                                    f"[RESTRICTED AREA] Robot {robot_id} is in traffic list for area {area_id} "
+                                    f"and {reason}, but still in waiting_status. Resuming task {task_id} and clearing waiting_status."
+                                )
+                                robots_to_resume.append((robot_id, task_id, task))
+                                robots_to_resume_set.add((robot_id, task_id))
+                                # 清除waiting_status，因为机器人已经在通行列表中了
+                                if robot_id in waiting_status:
+                                    del waiting_status[robot_id]
+                        break
+                    else:
+                        logger.info(
+                            f"[RESTRICTED AREA] Robot {robot_id} is in traffic list for area {area_id} "
+                            f"but should_resume=False (task has action_id={task.action_id})"
+                        )
+        
+        # 然后检查waiting_status中的机器人
+        if not waiting_status:
+            # 如果没有等待状态，但上面找到了需要恢复的任务，直接处理
+            if robots_to_resume:
+                pass  # 继续处理robots_to_resume
+            else:
+                return
+        
+        for robot_id, status in list(waiting_status.items()):
+            try:
+                area_id = status.get('area_id')
+                waiting_point = status.get('waiting_point')
+                task_id = status.get('original_task_id')
+                waiting_since = status.get('waiting_since')
+                
+                if not task_id or not area_id:
+                    continue
+                
+                # 获取任务
+                task = self.tasks.get(task_id)
+                if not task:
+                    # 任务不存在，清除等待状态
+                    if robot_id in waiting_status:
+                        del waiting_status[robot_id]
+                    continue
+                
+                # 如果任务已完成或已取消，清除等待状态
+                if task.status in [TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELLED]:
+                    if robot_id in waiting_status:
+                        del waiting_status[robot_id]
+                    continue
+                
+                # 检查机器人是否在限行区域的通行列表中（说明可以通行了）
+                traffic = self.restricted_area_traffic_manager.area_traffic.get(area_id)
+                if traffic and robot_id in traffic['robots']:
+                    # 机器人可以通行了，恢复任务
+                    if (robot_id, task_id) not in robots_to_resume_set:
+                        robots_to_resume.append((robot_id, task_id, task))
+                        robots_to_resume_set.add((robot_id, task_id))
+                    
+                    # 清除等待状态
+                    if robot_id in waiting_status:
+                        del waiting_status[robot_id]
+                    
+                    logger.info(
+                        f"[RESTRICTED AREA] Robot {robot_id} can now pass through restricted area {area_id}, "
+                        f"resuming task {task_id}"
+                    )
+                    continue  # 已处理，继续下一个机器人
+                
+                # 如果机器人不在通行列表中，但限行区域有空位，尝试重新申请通行
+                # 这可以处理机器人尚未到达等待点，但限行区已释放的情况
+                if traffic and len(traffic['robots']) < traffic.get('capacity', 1):
+                    # 限行区域有空位，尝试重新申请通行
+                    try:
+                        robot_state = await self.robot_manager.get_robot_state(robot_id, force_update=False)
+                        if robot_state and robot_state.pose:
+                            priority_value = task.priority.value
+                            can_pass, _, _ = await self.restricted_area_traffic_manager.check_and_manage_traffic(
+                                robot_id, robot_state.pose, float(priority_value), task_id
+                            )
+                            if can_pass:
+                                logger.info(
+                                    f"[RESTRICTED AREA] Robot {robot_id} can now pass through restricted area {area_id} "
+                                    f"(capacity available), resuming task {task_id}"
+                                )
+                                if (robot_id, task_id) not in robots_to_resume_set:
+                                    robots_to_resume.append((robot_id, task_id, task))
+                                    robots_to_resume_set.add((robot_id, task_id))
+                                if robot_id in waiting_status:
+                                    del waiting_status[robot_id]
+                                continue  # 已处理，继续下一个机器人
+                    except Exception as e:
+                        logger.debug(f"Failed to check traffic for robot {robot_id}: {e}")
+                
+                # 检查机器人是否到达等待点
+                if waiting_point:
+                    # 检查机器人是否到达等待点
+                    robot_state = await self.robot_manager.get_robot_state(robot_id, force_update=False)
+                    if robot_state and robot_state.pose:
+                        # 首先检查机器人是否还在限行区域内
+                        # 如果不在限行区域内，应该清除等待状态，而不是恢复任务
+                        is_still_in_area = False
+                        restricted_areas = self.restricted_area_traffic_manager.map_manager.restricted_areas
+                        for area in restricted_areas:
+                            area_data = area.get("area", {})
+                            if not area_data or area.get("id") != area_id:
+                                continue
+                            start = area_data.get("start", {})
+                            end = area_data.get("end", {})
+                            half_width = area_data.get("half_width", 0.5)
+                            if start and end:
+                                is_still_in_area = self.restricted_area_traffic_manager.is_point_in_restricted_area(
+                                    robot_state.pose, start, end, half_width
+                                )
+                                if is_still_in_area:
+                                    break
+                        
+                        # 如果机器人不在限行区域内了，且未到达等待点，清除等待状态并恢复任务
+                        if not is_still_in_area:
+                            distance = math.sqrt(
+                                (robot_state.pose.x - waiting_point.x) ** 2 + 
+                                (robot_state.pose.y - waiting_point.y) ** 2
+                            )
+                            if distance >= 0.5:  # 未到达等待点
+                                # 重要：检查机器人是否在充电桩附近，如果是，不应该恢复任务（可能是回桩了）
+                                distance_to_origin = math.sqrt(robot_state.pose.x ** 2 + robot_state.pose.y ** 2)
+                                if distance_to_origin < 1.5 and robot_state.status.value == "idle":
+                                    # 机器人在充电桩附近，可能是回桩了，不应该恢复任务
+                                    logger.warning(
+                                        f"[RESTRICTED AREA] Robot {robot_id} is no longer in restricted area {area_id} "
+                                        f"and is at charging dock (distance={distance_to_origin:.2f}m, status=idle). "
+                                        f"Task {task_id} may have been interrupted. Clearing waiting status but NOT resuming task."
+                                    )
+                                    if robot_id in waiting_status:
+                                        del waiting_status[robot_id]
+                                    if traffic and traffic['waiting_queue']:
+                                        traffic['waiting_queue'] = [
+                                            (wid, pri, tid, et) for wid, pri, tid, et in traffic['waiting_queue']
+                                            if wid != robot_id
+                                        ]
+                                    continue
+                                
+                                logger.info(
+                                    f"[RESTRICTED AREA] Robot {robot_id} is no longer in restricted area {area_id} "
+                                    f"and has not reached waiting point, clearing waiting status and resuming task"
+                                )
+                                # 恢复任务，因为机器人已经不在限行区域内了，应该继续执行任务
+                                if (robot_id, task_id) not in robots_to_resume_set:
+                                    robots_to_resume.append((robot_id, task_id, task))
+                                    robots_to_resume_set.add((robot_id, task_id))
+                                if robot_id in waiting_status:
+                                    del waiting_status[robot_id]
+                                # 从等待队列中移除
+                                if traffic and traffic['waiting_queue']:
+                                    traffic['waiting_queue'] = [
+                                        (wid, pri, tid, et) for wid, pri, tid, et in traffic['waiting_queue']
+                                        if wid != robot_id
+                                    ]
+                                continue
+                            # 如果到达等待点但不在限行区域内，应该检查限行区域是否有空位
+                            # 只有当限行区域有空位时，才恢复任务；否则继续等待
+                            else:
+                                # 重要：检查机器人是否在充电桩附近，如果是，不应该恢复任务（可能是回桩了）
+                                distance_to_origin = math.sqrt(robot_state.pose.x ** 2 + robot_state.pose.y ** 2)
+                                if distance_to_origin < 1.5 and robot_state.status.value == "idle":
+                                    # 机器人在充电桩附近，可能是回桩了，不应该恢复任务
+                                    logger.warning(
+                                        f"[RESTRICTED AREA] Robot {robot_id} reached waiting point but is at charging dock "
+                                        f"(distance={distance_to_origin:.2f}m, status=idle). "
+                                        f"Task {task_id} may have been interrupted. Clearing waiting status but NOT resuming task."
+                                    )
+                                    if robot_id in waiting_status:
+                                        del waiting_status[robot_id]
+                                    if traffic and traffic['waiting_queue']:
+                                        traffic['waiting_queue'] = [
+                                            (wid, pri, tid, et) for wid, pri, tid, et in traffic['waiting_queue']
+                                            if wid != robot_id
+                                        ]
+                                    continue
+                                
+                                # 检查限行区域是否有空位（通过检查机器人是否在通行列表中）
+                                if traffic and robot_id in traffic['robots']:
+                                    # 机器人在通行列表中，说明限行区域已释放，可以恢复任务
+                                    logger.info(
+                                        f"[RESTRICTED AREA] Robot {robot_id} reached waiting point and restricted area {area_id} "
+                                        f"has capacity available, resuming task {task_id}"
+                                    )
+                                    if (robot_id, task_id) not in robots_to_resume_set:
+                                        robots_to_resume.append((robot_id, task_id, task))
+                                        robots_to_resume_set.add((robot_id, task_id))
+                                    if robot_id in waiting_status:
+                                        del waiting_status[robot_id]
+                                    if traffic and traffic['waiting_queue']:
+                                        traffic['waiting_queue'] = [
+                                            (wid, pri, tid, et) for wid, pri, tid, et in traffic['waiting_queue']
+                                            if wid != robot_id
+                                        ]
+                                # 检查限行区域是否有空位（即使机器人不在通行列表中，也可能有空位）
+                                elif traffic and len(traffic['robots']) < traffic.get('capacity', 1):
+                                    # 限行区域有空位，尝试重新申请通行
+                                    priority_value = task.priority.value
+                                can_pass, _, _ = await self.restricted_area_traffic_manager.check_and_manage_traffic(
+                                    robot_id, robot_state.pose, float(priority_value), task_id
+                                )
+                                if can_pass:
+                                    logger.info(
+                                        f"[RESTRICTED AREA] Robot {robot_id} reached waiting point and restricted area {area_id} "
+                                        f"has capacity available, resuming task {task_id}"
+                                    )
+                                    if (robot_id, task_id) not in robots_to_resume_set:
+                                        robots_to_resume.append((robot_id, task_id, task))
+                                        robots_to_resume_set.add((robot_id, task_id))
+                                    if robot_id in waiting_status:
+                                        del waiting_status[robot_id]
+                                    if traffic and traffic['waiting_queue']:
+                                        traffic['waiting_queue'] = [
+                                            (wid, pri, tid, et) for wid, pri, tid, et in traffic['waiting_queue']
+                                            if wid != robot_id
+                                        ]
+                                    else:
+                                        # 限行区域还没有空位，继续等待
+                                        logger.debug(
+                                            f"[RESTRICTED AREA] Robot {robot_id} reached waiting point but restricted area {area_id} "
+                                            f"is still occupied, waiting for capacity to be available"
+                                        )
+                                else:
+                                    # 限行区域还没有空位，继续等待
+                                    logger.debug(
+                                        f"[RESTRICTED AREA] Robot {robot_id} reached waiting point but restricted area {area_id} "
+                                        f"is still occupied (capacity: {traffic.get('capacity', 1) if traffic else 1}, "
+                                        f"current: {len(traffic['robots']) if traffic else 0}), waiting for capacity to be available"
+                                    )
+                                continue
+                        
+                        # 机器人还在限行区域内，检查是否到达等待点
+                        distance = math.sqrt(
+                            (robot_state.pose.x - waiting_point.x) ** 2 + 
+                            (robot_state.pose.y - waiting_point.y) ** 2
+                        )
+                        
+                        if distance < 0.5:  # 到达等待点
+                            # 检查限行区域是否有空位（通过检查机器人是否在通行列表中）
+                            # 如果机器人在通行列表中，说明限行区域已释放，可以恢复任务
+                            if traffic and robot_id in traffic['robots']:
+                                logger.info(
+                                    f"[RESTRICTED AREA] Robot {robot_id} reached waiting point and restricted area {area_id} "
+                                    f"has capacity available, resuming task {task_id}"
+                                )
+                                if (robot_id, task_id) not in robots_to_resume_set:
+                                    robots_to_resume.append((robot_id, task_id, task))
+                                    robots_to_resume_set.add((robot_id, task_id))
+                                if robot_id in waiting_status:
+                                    del waiting_status[robot_id]
+                            # 检查限行区域是否有空位（即使机器人不在通行列表中，也可能有空位）
+                            elif traffic and len(traffic['robots']) < traffic.get('capacity', 1):
+                                # 限行区域有空位，尝试重新申请通行
+                                priority_value = task.priority.value
+                                can_pass, _, _ = await self.restricted_area_traffic_manager.check_and_manage_traffic(
+                                    robot_id, robot_state.pose, float(priority_value), task_id
+                                )
+                                if can_pass:
+                                    logger.info(
+                                        f"[RESTRICTED AREA] Robot {robot_id} reached waiting point and restricted area {area_id} "
+                                        f"has capacity available, resuming task {task_id}"
+                                    )
+                                    if (robot_id, task_id) not in robots_to_resume_set:
+                                        robots_to_resume.append((robot_id, task_id, task))
+                                        robots_to_resume_set.add((robot_id, task_id))
+                                    if robot_id in waiting_status:
+                                        del waiting_status[robot_id]
+                            elif waiting_since:
+                                # 如果等待超过30秒，重新检查限行区域通行状态
+                                wait_time = (datetime.now() - waiting_since).total_seconds()
+                                if wait_time > 30.0:
+                                    # 重新检查限行区域通行
+                                    priority_value = task.priority.value
+                                    can_pass, _, _ = await self.restricted_area_traffic_manager.check_and_manage_traffic(
+                                        robot_id, robot_state.pose, float(priority_value), task_id
+                                    )
+                                    # 如果可以通过且还在限行区域内，恢复任务
+                                    if can_pass and is_still_in_area:
+                                        logger.info(
+                                            f"[RESTRICTED AREA] Robot {robot_id} can now pass through restricted area {area_id} "
+                                            f"after waiting {wait_time:.1f}s, resuming task {task_id}"
+                                        )
+                                        if (robot_id, task_id) not in robots_to_resume_set:
+                                            robots_to_resume.append((robot_id, task_id, task))
+                                            robots_to_resume_set.add((robot_id, task_id))
+                                        if robot_id in waiting_status:
+                                            del waiting_status[robot_id]
+                                    # 如果不在限行区域内了，清除等待状态并恢复任务
+                                    elif not is_still_in_area:
+                                        # 重要：检查机器人是否在充电桩附近，如果是，不应该恢复任务（可能是回桩了）
+                                        distance_to_origin = math.sqrt(robot_state.pose.x ** 2 + robot_state.pose.y ** 2)
+                                        if distance_to_origin < 1.5 and robot_state.status.value == "idle":
+                                            # 机器人在充电桩附近，可能是回桩了，不应该恢复任务
+                                            logger.warning(
+                                                f"[RESTRICTED AREA] Robot {robot_id} is no longer in restricted area {area_id} "
+                                                f"after waiting {wait_time:.1f}s and is at charging dock "
+                                                f"(distance={distance_to_origin:.2f}m, status=idle). "
+                                                f"Task {task_id} may have been interrupted. Clearing waiting status but NOT resuming task."
+                                            )
+                                            if robot_id in waiting_status:
+                                                del waiting_status[robot_id]
+                                            if traffic and traffic['waiting_queue']:
+                                                traffic['waiting_queue'] = [
+                                                    (wid, pri, tid, et) for wid, pri, tid, et in traffic['waiting_queue']
+                                                    if wid != robot_id
+                                                ]
+                                        else:
+                                            logger.info(
+                                                f"[RESTRICTED AREA] Robot {robot_id} is no longer in restricted area {area_id} "
+                                                f"after waiting {wait_time:.1f}s, clearing waiting status and resuming task"
+                                            )
+                                            # 恢复任务，因为机器人已经不在限行区域内了，应该继续执行任务
+                                            if (robot_id, task_id) not in robots_to_resume_set:
+                                                robots_to_resume.append((robot_id, task_id, task))
+                                                robots_to_resume_set.add((robot_id, task_id))
+                                            if robot_id in waiting_status:
+                                                del waiting_status[robot_id]
+                                            if traffic and traffic['waiting_queue']:
+                                                traffic['waiting_queue'] = [
+                                                    (wid, pri, tid, et) for wid, pri, tid, et in traffic['waiting_queue']
+                                                    if wid != robot_id
+                                                ]
+                            # 如果限行区域还没有释放，机器人继续等待
+                            else:
+                                logger.debug(
+                                    f"[RESTRICTED AREA] Robot {robot_id} reached waiting point but restricted area {area_id} "
+                                    f"is still occupied, waiting for capacity to be available"
+                                )
+            except Exception as e:
+                logger.debug(f"Failed to check waiting robot {robot_id}: {e}")
+        
+        # 恢复任务执行
+        for robot_id, task_id, task in robots_to_resume:
+            try:
+                # 确保任务状态是 EXECUTING（如果任务被暂停或处于其他状态，恢复为 EXECUTING）
+                if task.status not in [TaskStatus.EXECUTING, TaskStatus.ASSIGNED]:
+                    logger.info(
+                        f"[RESTRICTED AREA] Resuming task {task_id} for robot {robot_id} "
+                        f"from status {task.status.value} to EXECUTING"
+                    )
+                    task.status = TaskStatus.EXECUTING
+                
+                agent = self.robot_manager.get_robot_agent(robot_id)
+                if not agent:
+                    logger.warning(f"Failed to get robot agent for robot {robot_id} to resume task {task_id}")
+                    continue
+                
+                # 清除 action_id，准备重新执行
+                task.action_id = None
+                
+                # 恢复任务执行
+                if task.is_multi_action and task.actions and task.current_action_index < len(task.actions):
+                    # 多动作任务：继续执行当前动作（从当前索引开始）
+                    current_action_item = task.actions[task.current_action_index]
+                    logger.info(
+                        f"[RESTRICTED AREA] Resuming multi-action task {task_id} for robot {robot_id}, "
+                        f"continuing from action {task.current_action_index + 1}/{len(task.actions)} "
+                        f"(type={current_action_item.action_type})"
+                    )
+                    
+                    # 重要：检查当前动作是否应该是GO_HOME
+                    # 如果当前动作不是GO_HOME，但机器人已经在充电桩附近，说明任务可能被错误地跳过了
+                    if current_action_item.action_type != ActionType.GO_HOME:
+                        try:
+                            robot_state = await self.robot_manager.get_robot_state(robot_id, force_update=True)
+                            if robot_state and robot_state.pose:
+                                distance_to_origin = math.sqrt(robot_state.pose.x ** 2 + robot_state.pose.y ** 2)
+                                if distance_to_origin < 1.5 and robot_state.status.value == "idle":
+                                    logger.warning(
+                                        f"[RESTRICTED AREA] Robot {robot_id} is at charging dock but current action "
+                                        f"({task.current_action_index + 1}/{len(task.actions)}) is not GO_HOME. "
+                                        f"Task {task_id} may have been incorrectly advanced. "
+                                        f"Current action type: {current_action_item.action_type}. "
+                                        f"Will still resume task to continue from current action."
+                                    )
+                        except Exception as e:
+                            logger.debug(f"Failed to check robot state when resuming task {task_id}: {e}")
+                    
+                    await self._execute_next_action(task, agent, robot_id)
+                else:
+                    # 普通任务：重新发送move_to指令到目标点
+                    if task.target_pose:
+                        acceptable_precision = getattr(task, 'acceptable_precision', 0.3)
+                        speed_ratio = getattr(task, 'speed_ratio', 1.0)
+                        
+                        move_result = await agent.move_to(
+                            target=task.target_pose,
+                            mode=0,
+                            acceptable_precision=acceptable_precision,
+                            speed_ratio=speed_ratio
+                        )
+                        task.action_id = move_result.action_id if move_result else None
+                        if task.started_at is None:
+                            task.started_at = datetime.now()
+                        self._save_tasks_to_file()
+                        logger.info(
+                            f"[RESTRICTED AREA] Resumed task {task_id} for robot {robot_id}, "
+                            f"action_id={task.action_id}, target=({task.target_pose.x:.2f}, {task.target_pose.y:.2f})"
+                        )
+                    else:
+                        logger.warning(
+                            f"[RESTRICTED AREA] Cannot resume task {task_id} for robot {robot_id}: "
+                            f"no target_pose"
+                        )
+            except Exception as e:
+                logger.error(
+                    f"[RESTRICTED AREA] Failed to resume task {task_id} for robot {robot_id}: {e}",
+                    exc_info=True
+                )
+    
     async def _resume_task_after_deadlock_resolution(self, task: Task, robot_id: str):
         """
         恢复死锁解除后的任务执行
@@ -1718,6 +2443,17 @@ class TaskScheduler:
         # 首先检查是否有机器人已完成死锁解除避让，需要恢复任务
         await self._check_and_resume_deadlock_resolution_tasks()
         
+        # 限行区域监测：实时监测机器人位置，判断是否离开限行区域
+        try:
+            await self.restricted_area_traffic_manager.monitor_robots()
+            # 检查等待队列，让可以通行的机器人继续执行任务
+            await self.restricted_area_traffic_manager.check_waiting_robots()
+        except Exception as e:
+            logger.debug(f"Failed to monitor restricted areas: {e}")
+        
+        # 检查等待中的机器人是否可以恢复任务
+        await self._check_and_resume_waiting_robots()
+        
         # 检查所有执行中或已分配的任务
         executing_tasks = [
             t for t in self.tasks.values()
@@ -1729,7 +2465,7 @@ class TaskScheduler:
             return
         
         logger.info(f"Checking {len(executing_tasks)} executing/assigned tasks for status updates")
-
+        
         for task in executing_tasks:
             # 【修复】为每个任务的更新添加5秒超时保护，防止单个任务阻塞整个更新循环
             try:
@@ -1775,6 +2511,8 @@ class TaskScheduler:
             # 所有动作完成
             task.status = TaskStatus.COMPLETED
             task.completed_at = datetime.now()
+            # 释放限行区域占用
+            await self._release_robot_from_restricted_area_on_completion(task)
             if task.task_id in self.task_paths:
                 del self.task_paths[task.task_id]
             self._save_tasks_to_file()
@@ -1796,6 +2534,67 @@ class TaskScheduler:
             return False
         
         current_action_item = task.actions[task.current_action_index]
+        
+        # 对MOVE_TO和GO_HOME动作检查位置
+        if current_action_item.action_type == ActionType.GO_HOME:
+            # 对于GO_HOME动作，检查机器人是否在充电桩
+            try:
+                robot_state = await self.robot_manager.get_robot_state(robot_id)
+                if not robot_state or not robot_state.pose:
+                    return False
+                
+                # 获取充电桩位置
+                try:
+                    dock_pose = await agent.get_home_dock_pose()
+                    if dock_pose:
+                        target = dock_pose
+                    else:
+                        # 如果没有获取到充电桩位置，使用原点作为默认值
+                        target = Pose(x=0.0, y=0.0, yaw=0.0)
+                except Exception as e:
+                    logger.debug(f"Failed to get dock pose for robot {robot_id}: {e}")
+                    # 使用原点作为默认值
+                    target = Pose(x=0.0, y=0.0, yaw=0.0)
+                
+                current = robot_state.pose
+                distance = ((current.x - target.x) ** 2 + (current.y - target.y) ** 2) ** 0.5
+                acceptable_precision = 1.5  # GO_HOME动作的精度阈值
+                
+                logger.info(
+                    f"[MULTI-ACTION] Task {task.task_id} GO_HOME action position check: "
+                    f"current=({current.x:.2f}, {current.y:.2f}), dock=({target.x:.2f}, {target.y:.2f}), "
+                    f"distance={distance:.2f}m, acceptable_precision={acceptable_precision}m, "
+                    f"status={robot_state.status.value}, current_action_id={robot_state.current_action_id}"
+                )
+                
+                # GO_HOME动作必须真正到达充电桩才能完成
+                # 要求：1) 机器人状态为idle且没有current_action_id 2) 距离充电桩在可接受范围内（1.5米）
+                if robot_state.status.value == "idle" and not robot_state.current_action_id:
+                    # 只有距离在可接受范围内（1.5米），才认为完成
+                    if distance <= acceptable_precision:
+                        logger.info(
+                            f"[MULTI-ACTION] Task {task.task_id} GO_HOME action completed: "
+                            f"robot at charging dock (distance={distance:.2f}m <= {acceptable_precision}m, status=idle, no action_id)"
+                        )
+                        return True
+                    else:
+                        # 机器人状态是idle但没有到达充电桩，可能是回桩失败或中断
+                        logger.warning(
+                            f"[MULTI-ACTION] Task {task.task_id} GO_HOME action: robot is idle with no action_id, "
+                            f"but distance={distance:.2f}m > {acceptable_precision}m from dock. "
+                            f"Robot may not have reached charging dock. Action still in progress."
+                        )
+                        return False
+                else:
+                    logger.debug(
+                        f"[MULTI-ACTION] Task {task.task_id} GO_HOME action still in progress: "
+                        f"distance={distance:.2f}m, status={robot_state.status.value}, "
+                        f"current_action_id={robot_state.current_action_id}"
+                    )
+                    return False
+            except Exception as e:
+                logger.warning(f"[MULTI-ACTION] Failed to check GO_HOME position for task {task.task_id}: {e}")
+                return False
         
         # 只对MOVE_TO动作检查位置
         if current_action_item.action_type != ActionType.MOVE_TO:
@@ -1873,6 +2672,717 @@ class TaskScheduler:
             )
             return False
 
+    async def _handle_action_status_none(self, task, agent, action_state):
+        """
+        处理action状态为None的情况（action可能已完成或被清除）
+        重点关注多动作任务的完成判断和死锁检测
+        """
+        logger.warning(
+            f"Task {task.task_id} action_id={task.action_id} status is None. "
+            f"Action may have been completed or cleared. Checking robot current action..."
+        )
+        try:
+            current_action = await agent.get_current_action()
+            if current_action is None or current_action.action_id != task.action_id:
+                # 机器人当前没有执行这个action，可能已经完成
+                robot_state = await self.robot_manager.get_robot_state(task.robot_id)
+                if robot_state:
+                    # 对于多动作任务，检查当前动作类型
+                    if task.is_multi_action and task.actions and task.current_action_index < len(task.actions):
+                        current_action_item = task.actions[task.current_action_index]
+                        
+                        # 如果是WAIT动作，不应该检查机器人状态（WAIT动作由后台任务处理）
+                        if current_action_item.action_type == ActionType.WAIT:
+                            logger.debug(
+                                f"Task {task.task_id} is in WAIT action (action_index={task.current_action_index}), "
+                                f"robot idle status is normal, waiting for WAIT to complete"
+                            )
+                            return False  # 继续等待WAIT完成
+                        
+                        # 如果是GO_HOME动作，检查机器人是否在充电桩
+                        if current_action_item.action_type == ActionType.GO_HOME:
+                            if robot_state.status == "idle" and not robot_state.current_action_id:
+                                logger.info(
+                                    f"Task {task.task_id} GO_HOME action: robot {task.robot_id} appears to be at charging dock "
+                                    f"(status=idle, no current_action_id)"
+                                )
+                                await self._handle_multi_action_completion(task, agent, task.robot_id, task.current_action_index)
+                                return True
+                            else:
+                                logger.debug(
+                                    f"Task {task.task_id} GO_HOME action: robot {task.robot_id} status={robot_state.status}, "
+                                    f"current_action_id={robot_state.current_action_id}, still in progress"
+                                )
+                                return False  # 继续等待
+                        
+                        # 对于MOVE_TO动作，通过检查机器人位置来判断是否到达目标
+                        elif current_action_item.action_type == ActionType.MOVE_TO:
+                            if current_action_item.target_pose:
+                                target = current_action_item.target_pose
+                            elif current_action_item.poi_name:
+                                # POI导航：尝试获取POI位置
+                                try:
+                                    pois = await asyncio.wait_for(agent.get_all_pois(), timeout=2.0)
+                                    for poi in pois:
+                                        if poi.id == current_action_item.poi_name or (poi.metadata and poi.metadata.get("display_name") == current_action_item.poi_name):
+                                            if poi.pose:
+                                                target = poi.pose
+                                                break
+                                    else:
+                                        target = task.target_pose
+                                except:
+                                    target = task.target_pose
+                            else:
+                                target = task.target_pose
+                        else:
+                            target = task.target_pose
+                        
+                        current = robot_state.pose
+                        distance = ((current.x - target.x) ** 2 + (current.y - target.y) ** 2) ** 0.5
+                        logger.info(
+                            f"Task {task.task_id}: action status is None, "
+                            f"distance to target: {distance:.2f}m"
+                        )
+                        
+                        execution_time = 0.0
+                        if task.started_at:
+                            execution_time = (datetime.now() - task.started_at).total_seconds()
+                        
+                        acceptable_precision = 0.3
+                        if distance <= acceptable_precision:
+                            # 多动作任务：使用统一的方法处理动作完成
+                            completed_action_idx = task.current_action_index
+                            logger.info(
+                                f"[MULTI-ACTION] Task {task.task_id} action {completed_action_idx + 1}/{len(task.actions)} "
+                                f"completed (status=None, distance={distance:.2f}m <= {acceptable_precision}m)"
+                            )
+                            await self._handle_multi_action_completion(task, agent, task.robot_id, completed_action_idx)
+                            return True
+                        elif execution_time > 15.0:
+                            # 如果执行时间超过15秒且未到达目标，可能是死锁，触发死锁检测
+                            logger.warning(
+                                f"Task {task.task_id} action status is None, robot not at target "
+                                f"(distance={distance:.2f}m, execution_time={execution_time:.1f}s). "
+                                f"Robot may be blocked. Triggering deadlock detection..."
+                            )
+                            await self._recover_task_with_invalid_action_id(task, agent, task.robot_id)
+                            return False
+                    else:
+                        # 普通任务：检查是否到达目标
+                        if robot_state.pose and task.target_pose:
+                            current = robot_state.pose
+                            target = task.target_pose
+                            distance = ((current.x - target.x) ** 2 + (current.y - target.y) ** 2) ** 0.5
+                            acceptable_precision = 0.3
+                            if distance <= acceptable_precision:
+                                task.status = TaskStatus.COMPLETED
+                                task.completed_at = datetime.now()
+                                await self._release_robot_from_restricted_area_on_completion(task)
+                                if task.task_id in self.task_paths:
+                                    del self.task_paths[task.task_id]
+                                self._save_tasks_to_file()
+                                logger.info(
+                                    f"Task {task.task_id} completed (distance to target: {distance:.2f}m <= {acceptable_precision}m)"
+                                )
+                                return True
+        except Exception as e:
+            logger.debug(f"Failed to check current action for task {task.task_id}: {e}")
+        return False
+
+    async def _handle_action_status_done_success(self, task, agent, action_state):
+        """
+        处理action状态为Done且result=0（成功）的情况
+        重点关注多动作任务的完成处理
+        """
+        if task.is_multi_action and task.actions:
+            completed_action_idx = task.current_action_index
+            logger.info(
+                f"[MULTI-ACTION] Task {task.task_id} action {completed_action_idx + 1}/{len(task.actions)} "
+                f"(action_id={task.action_id}) completed successfully (status=4, result=0)"
+            )
+            await self._handle_multi_action_completion(task, agent, task.robot_id, completed_action_idx)
+            return True
+        else:
+            # 普通任务完成
+            task.status = TaskStatus.COMPLETED
+            task.completed_at = datetime.now()
+            logger.info(f"Task {task.task_id} completed successfully")
+            await self._release_robot_from_restricted_area_on_completion(task)
+            if task.task_id in self.task_paths:
+                del self.task_paths[task.task_id]
+            self._save_tasks_to_file()
+            return True
+
+    async def _handle_action_status_done_failed(self, task, agent, action_state, reason):
+        """
+        处理action状态为Done且result=-1（失败）的情况
+        重点关注多动作任务的失败处理和死锁检测
+        """
+        # 对于多动作任务，如果当前动作失败，尝试继续下一个动作（如果还有）
+        if task.is_multi_action and task.actions and task.current_action_index < len(task.actions):
+            current_action_item = task.actions[task.current_action_index]
+            
+            # 特殊处理：如果是GO_HOME动作失败且原因是DOCK_ID_NOT_FOUND，检查机器人是否已经在充电桩
+            if current_action_item.action_type == ActionType.GO_HOME and "DOCK_ID_NOT_FOUND" in reason:
+                try:
+                    robot_state = await self.robot_manager.get_robot_state(task.robot_id)
+                    if robot_state and robot_state.pose:
+                        distance_to_origin = math.sqrt(robot_state.pose.x * robot_state.pose.x + robot_state.pose.y * robot_state.pose.y)
+                        if distance_to_origin < 1.0 and robot_state.status.value == "idle":
+                            try:
+                                current_action = await agent.get_current_action()
+                                if not current_action or not current_action.action_id:
+                                    # 机器人已经在充电桩，标记当前动作完成，继续下一个动作
+                                    logger.info(
+                                        f"Task {task.task_id} GO_HOME action failed with DOCK_ID_NOT_FOUND "
+                                        f"but robot is already at charging dock (distance={distance_to_origin:.2f}m, status=idle). "
+                                        f"Marking action as completed and continuing to next action."
+                                    )
+                                    task.current_action_index += 1
+                                    if task.current_action_index < len(task.actions):
+                                        task.action_id = None
+                                        self._save_tasks_to_file()
+                                        await self._execute_next_action(task, agent, task.robot_id)
+                                        return True
+                                    else:
+                                        # 这是最后一个动作，标记任务为完成
+                                        task.status = TaskStatus.COMPLETED
+                                        task.completed_at = datetime.now()
+                                        await self._release_robot_from_restricted_area_on_completion(task)
+                                        if task.task_id in self.task_paths:
+                                            del self.task_paths[task.task_id]
+                                        self._save_tasks_to_file()
+                                        logger.info(
+                                            f"Task {task.task_id} (multi-action) completed: "
+                                            f"GO_HOME action failed with DOCK_ID_NOT_FOUND but robot already at charging dock"
+                                        )
+                                        return True
+                            except Exception as e:
+                                logger.debug(f"Failed to get current action for robot {task.robot_id}: {e}")
+                except Exception as e:
+                    logger.warning(f"Failed to check robot state for GO_HOME DOCK_ID_NOT_FOUND error: {e}")
+            
+            # 检查是否是因为无法到达目标而失败（可能是死锁导致）
+            # 如果机器人距离目标较近，可能是被阻塞，尝试触发死锁检测和恢复
+            try:
+                # 首先检查机器人是否正在死锁解除中，如果是，不要标记为失败
+                if task.robot_id in self.robots_in_deadlock_resolution:
+                    logger.info(
+                        f"Task {task.task_id} action {task.current_action_index} failed but robot {task.robot_id} is in deadlock resolution, "
+                        f"will not mark as failed, waiting for resolution to complete"
+                    )
+                    return False  # 继续监控，不标记为失败
+                
+                robot_state = await self.robot_manager.get_robot_state(task.robot_id)
+                if robot_state and robot_state.pose:
+                    # 获取当前动作的目标位置
+                    if current_action_item.action_type == ActionType.MOVE_TO:
+                        if current_action_item.target_pose:
+                            target = current_action_item.target_pose
+                        elif current_action_item.poi_name:
+                            try:
+                                pois = await asyncio.wait_for(agent.get_all_pois(), timeout=2.0)
+                                for poi in pois:
+                                    if poi.id == current_action_item.poi_name or (poi.metadata and poi.metadata.get("display_name") == current_action_item.poi_name):
+                                        if poi.pose:
+                                            target = poi.pose
+                                            break
+                                else:
+                                    target = task.target_pose
+                            except:
+                                target = task.target_pose
+                        else:
+                            target = task.target_pose
+                    else:
+                        target = task.target_pose
+                    
+                    current = robot_state.pose
+                    distance = math.sqrt((current.x - target.x) ** 2 + (current.y - target.y) ** 2)
+                    
+                    # 如果距离目标较近（< 8米），可能是被阻塞，尝试恢复
+                    if distance < 8.0:
+                        execution_time = 0.0
+                        if task.started_at:
+                            execution_time = (datetime.now() - task.started_at).total_seconds()
+                        
+                        # 如果执行时间较长，可能是死锁，触发死锁检测（降低阈值到10秒）
+                        if execution_time > 10.0:
+                            logger.warning(
+                                f"Task {task.task_id} failed but robot is close to target "
+                                f"(distance={distance:.2f}m, execution_time={execution_time:.1f}s). "
+                                f"May be blocked by other robots. Triggering deadlock detection and retry..."
+                            )
+                            # 触发死锁检测（异步，不阻塞）
+                            asyncio.create_task(self._trigger_deadlock_detection_for_robot(task.robot_id))
+                            
+                            # 尝试重新发送move_to指令（增加重试次数到5次）
+                            if task.retry_count < 5:
+                                task.retry_count += 1
+                                logger.info(
+                                    f"Retrying task {task.task_id} (retry {task.retry_count}/5) "
+                                    f"after failure, distance to target: {distance:.2f}m"
+                                )
+                                try:
+                                    move_result = await agent.move_to(
+                                        target=task.target_pose,
+                                        mode=0,
+                                        acceptable_precision=0.3,
+                                        speed_ratio=1.0
+                                    )
+                                    task.action_id = move_result.action_id
+                                    task.status = TaskStatus.EXECUTING
+                                    self._save_tasks_to_file()
+                                    logger.info(
+                                        f"Task {task.task_id} retried after failure, "
+                                        f"new action_id={task.action_id}, status=EXECUTING"
+                                    )
+                                    return False  # 继续监控，不标记为失败
+                                except Exception as e:
+                                    logger.error(f"Failed to retry task {task.task_id} after failure: {e}")
+                    
+                    # 如果距离很近（< 0.5米），认为已到达目标
+                    if distance <= 0.5:
+                        task.status = TaskStatus.COMPLETED
+                        task.completed_at = datetime.now()
+                        task.error_message = None
+                        if task.task_id in self.task_paths:
+                            del self.task_paths[task.task_id]
+                        self._save_tasks_to_file()
+                        logger.info(
+                            f"Task {task.task_id} action failed but robot reached target "
+                            f"(distance={distance:.2f}m <= 0.5m). Marking as completed."
+                        )
+                        return True
+            except Exception as e:
+                logger.warning(f"Failed to check robot position for failed task {task.task_id}: {e}")
+            
+            # 如果无法恢复，对于多动作任务，尝试继续下一个动作
+            logger.warning(
+                f"Task {task.task_id} action {task.current_action_index} failed: {reason or 'Unknown error'}. "
+                f"Attempting to continue with next action..."
+            )
+            task.current_action_index += 1
+            if task.current_action_index < len(task.actions):
+                task.action_id = None
+                self._save_tasks_to_file()
+                logger.info(
+                    f"Task {task.task_id} continuing to next action ({task.current_action_index}/{len(task.actions)})"
+                )
+                await self._execute_next_action(task, agent, task.robot_id)
+                return False  # 继续执行下一个动作
+            else:
+                # 所有动作都失败了，标记为失败
+                task.status = TaskStatus.FAILED
+                task.error_message = f"All actions failed. Last error: {reason or 'Unknown error'}"
+                task.completed_at = datetime.now()
+                if task.task_id in self.task_paths:
+                    del self.task_paths[task.task_id]
+                self._save_tasks_to_file()
+                logger.warning(f"Task {task.task_id} (multi-action) failed: all actions failed")
+                return True
+        
+        # 普通任务或无法继续的多动作任务：检查是否是因为无法到达目标而失败
+        try:
+            # 首先检查机器人是否正在死锁解除中，如果是，不要标记为失败
+            if task.robot_id in self.robots_in_deadlock_resolution:
+                logger.info(
+                    f"Task {task.task_id} failed but robot {task.robot_id} is in deadlock resolution, "
+                    f"will not mark as failed, waiting for resolution to complete"
+                )
+                return False  # 继续监控，不标记为失败
+            
+            robot_state = await self.robot_manager.get_robot_state(task.robot_id)
+            if robot_state and robot_state.pose and task.target_pose:
+                current = robot_state.pose
+                target = task.target_pose
+                distance = math.sqrt((current.x - target.x) ** 2 + (current.y - target.y) ** 2)
+                
+                # 如果距离目标较近（< 8米），可能是被阻塞，尝试恢复
+                if distance < 8.0:
+                    execution_time = 0.0
+                    if task.started_at:
+                        execution_time = (datetime.now() - task.started_at).total_seconds()
+                    
+                    # 如果执行时间较长，可能是死锁，触发死锁检测（降低阈值到10秒）
+                    if execution_time > 10.0:
+                        logger.warning(
+                            f"Task {task.task_id} failed but robot is close to target "
+                            f"(distance={distance:.2f}m, execution_time={execution_time:.1f}s). "
+                            f"May be blocked by other robots. Triggering deadlock detection and retry..."
+                        )
+                        # 触发死锁检测（异步，不阻塞）
+                        asyncio.create_task(self._trigger_deadlock_detection_for_robot(task.robot_id))
+                        
+                        # 尝试重新发送move_to指令（增加重试次数到5次）
+                        if task.retry_count < 5:
+                            task.retry_count += 1
+                            logger.info(
+                                f"Retrying task {task.task_id} (retry {task.retry_count}/5) "
+                                f"after failure, distance to target: {distance:.2f}m"
+                            )
+                            try:
+                                move_result = await agent.move_to(
+                                    target=task.target_pose,
+                                    mode=0,
+                                    acceptable_precision=0.3,
+                                    speed_ratio=1.0
+                                )
+                                task.action_id = move_result.action_id
+                                task.status = TaskStatus.EXECUTING
+                                self._save_tasks_to_file()
+                                logger.info(
+                                    f"Task {task.task_id} retried after failure, "
+                                    f"new action_id={task.action_id}, status=EXECUTING"
+                                )
+                                return False  # 继续监控，不标记为失败
+                            except Exception as e:
+                                logger.error(f"Failed to retry task {task.task_id} after failure: {e}")
+                    
+                    # 如果距离很近（< 0.5米），认为已到达目标
+                    if distance <= 0.5:
+                        task.status = TaskStatus.COMPLETED
+                        task.completed_at = datetime.now()
+                        task.error_message = None
+                        if task.task_id in self.task_paths:
+                            del self.task_paths[task.task_id]
+                        self._save_tasks_to_file()
+                        logger.info(
+                            f"Task {task.task_id} action failed but robot reached target "
+                            f"(distance={distance:.2f}m <= 0.5m). Marking as completed."
+                        )
+                        return True
+        except Exception as e:
+            logger.warning(f"Failed to check robot position for failed task {task.task_id}: {e}")
+        
+        # 如果无法恢复，标记为失败
+        task.status = TaskStatus.FAILED
+        task.error_message = reason or "Unknown error"
+        task.completed_at = datetime.now()
+        if task.task_id in self.task_paths:
+            del self.task_paths[task.task_id]
+        self._save_tasks_to_file()
+        logger.warning(f"Task {task.task_id} failed: {task.error_message}")
+        return True
+
+    async def _handle_action_status_done_aborted(self, task, agent, action_state):
+        """
+        处理action状态为Done且result=-2（中止）的情况
+        重点关注多动作任务的中止处理和限行区域等待逻辑
+        """
+        robot_id = task.robot_id
+        if robot_id and self.restricted_area_traffic_manager:
+            waiting_status = self.restricted_area_traffic_manager.robot_waiting_status.get(robot_id)
+            if waiting_status:
+                # 机器人正在限行区域等待，这是正常的等待行为，不要取消任务
+                if task.is_multi_action and task.actions and task.current_action_index < len(task.actions):
+                    current_action_item = task.actions[task.current_action_index]
+                    if current_action_item.action_type == ActionType.GO_HOME:
+                        # 检查机器人是否已经在充电桩
+                        try:
+                            robot_state = await self.robot_manager.get_robot_state(robot_id)
+                            if robot_state and robot_state.pose:
+                                distance_to_origin = math.sqrt(robot_state.pose.x * robot_state.pose.x + robot_state.pose.y * robot_state.pose.y)
+                                if distance_to_origin < 1.0 and robot_state.status.value == "idle":
+                                    try:
+                                        current_action = await agent.get_current_action()
+                                        if not current_action or not current_action.action_id:
+                                            # 机器人已经回桩，标记任务为完成
+                                            task.status = TaskStatus.COMPLETED
+                                            task.completed_at = datetime.now()
+                                            await self._release_robot_from_restricted_area_on_completion(task)
+                                            if task.task_id in self.task_paths:
+                                                del self.task_paths[task.task_id]
+                                            if robot_id in self.restricted_area_traffic_manager.robot_waiting_status:
+                                                del self.restricted_area_traffic_manager.robot_waiting_status[robot_id]
+                                            self._save_tasks_to_file()
+                                            logger.info(
+                                                f"Task {task.task_id} (multi-action) completed: "
+                                                f"GO_HOME action aborted but robot already at charging dock "
+                                                f"(distance={distance_to_origin:.2f}m, status=idle)"
+                                            )
+                                            return True
+                                    except Exception as e:
+                                        logger.debug(f"Failed to get current action for robot {robot_id}: {e}")
+                        except Exception as e:
+                            logger.debug(f"Failed to check robot state for GO_HOME in restricted area: {e}")
+                    
+                    # 机器人正在限行区域等待，这是正常的等待行为，不要取消任务
+                    logger.info(
+                        f"Task {task.task_id} action aborted but robot {robot_id} is waiting at restricted area "
+                        f"(area_id={waiting_status.get('area_id')}). Task will resume when area is released."
+                    )
+                    task.action_id = None
+                    self._save_tasks_to_file()
+                    return False  # 继续等待，不标记为完成
+        
+        # 对于多动作任务，如果当前动作中止，尝试继续下一个动作
+        if task.is_multi_action and task.actions and task.current_action_index < len(task.actions):
+            current_action_item = task.actions[task.current_action_index]
+            try:
+                robot_state = await self.robot_manager.get_robot_state(task.robot_id)
+                if robot_state and robot_state.pose:
+                    # 获取当前动作的目标位置
+                    if current_action_item.action_type == ActionType.MOVE_TO:
+                        if current_action_item.target_pose:
+                            target = current_action_item.target_pose
+                        elif current_action_item.poi_name:
+                            try:
+                                pois = await asyncio.wait_for(agent.get_all_pois(), timeout=2.0)
+                                for poi in pois:
+                                    if poi.id == current_action_item.poi_name or (poi.metadata and poi.metadata.get("display_name") == current_action_item.poi_name):
+                                        if poi.pose:
+                                            target = poi.pose
+                                            break
+                                else:
+                                    target = task.target_pose
+                            except:
+                                target = task.target_pose
+                        else:
+                            target = task.target_pose
+                    else:
+                        target = task.target_pose
+                    
+                    current = robot_state.pose
+                    distance = math.sqrt((current.x - target.x) ** 2 + (current.y - target.y) ** 2)
+                    acceptable_precision = 0.3
+                    
+                    if distance <= acceptable_precision:
+                        # 机器人已经到达目标，继续下一个动作
+                        logger.info(
+                            f"Task {task.task_id} action {task.current_action_index + 1} aborted but robot reached target "
+                            f"(distance={distance:.2f}m <= {acceptable_precision}m). Continuing to next action."
+                        )
+                        task.current_action_index += 1
+                        if task.current_action_index < len(task.actions):
+                            task.action_id = None
+                            self._save_tasks_to_file()
+                            await self._execute_next_action(task, agent, task.robot_id)
+                            return False
+                        else:
+                            # 所有动作完成
+                            task.status = TaskStatus.COMPLETED
+                            task.completed_at = datetime.now()
+                            await self._release_robot_from_restricted_area_on_completion(task)
+                            if task.task_id in self.task_paths:
+                                del self.task_paths[task.task_id]
+                            self._save_tasks_to_file()
+                            logger.info(f"Task {task.task_id} (multi-action) completed all actions")
+                            return True
+                    else:
+                        # 机器人没有到达目标，应该重试当前动作，而不是跳到下一个动作
+                        logger.warning(
+                            f"Task {task.task_id} action {task.current_action_index + 1} aborted and robot did not reach target "
+                            f"(distance={distance:.2f}m > {acceptable_precision}m). Retrying current action."
+                        )
+                        task.action_id = None
+                        self._save_tasks_to_file()
+                        # 重试当前动作，而不是跳到下一个动作
+                        await self._execute_next_action(task, agent, task.robot_id)
+                        return False
+            except Exception as e:
+                logger.warning(f"Failed to check robot position for aborted task {task.task_id}: {e}")
+            
+            # 如果无法判断是否到达目标，检查机器人是否在等待点
+            # 如果在等待点，应该等待完成后重试当前动作，而不是跳到下一个动作
+            if robot_id and self.restricted_area_traffic_manager:
+                waiting_status = self.restricted_area_traffic_manager.robot_waiting_status.get(robot_id)
+                if waiting_status:
+                    # 机器人在等待点，等待完成后应该重试当前动作
+                    logger.info(
+                        f"Task {task.task_id} action {task.current_action_index + 1} aborted but robot {robot_id} "
+                        f"is at waiting point. Will retry current action after waiting."
+                    )
+                    task.action_id = None
+                    self._save_tasks_to_file()
+                    return False  # 继续等待，等待完成后会重试当前动作
+            
+            # 如果机器人不在等待点且无法判断是否到达目标，应该重试当前动作
+            # 而不是跳到下一个动作（因为动作没有完成）
+            logger.warning(
+                f"Task {task.task_id} action {task.current_action_index + 1} aborted and robot did not reach target. "
+                f"Retrying current action instead of skipping to next."
+            )
+            task.action_id = None
+            self._save_tasks_to_file()
+            # 重试当前动作，而不是跳到下一个动作
+            await self._execute_next_action(task, agent, task.robot_id)
+            return False
+        
+        # 如果不是多动作任务，处理单动作任务的中止
+        else:
+                # 这是最后一个动作，检查是否是GO_HOME动作且机器人已经回桩
+                if task.actions and task.current_action_index < len(task.actions):
+                    last_action = task.actions[task.current_action_index]
+                    if last_action and last_action.action_type == ActionType.GO_HOME:
+                        try:
+                            robot_state = await self.robot_manager.get_robot_state(task.robot_id)
+                            if robot_state and robot_state.status.value == "idle":
+                                try:
+                                    current_action = await agent.get_current_action()
+                                    if not current_action or not current_action.action_id:
+                                        task.status = TaskStatus.COMPLETED
+                                        task.completed_at = datetime.now()
+                                        await self._release_robot_from_restricted_area_on_completion(task)
+                                        if task.task_id in self.task_paths:
+                                            del self.task_paths[task.task_id]
+                                        self._save_tasks_to_file()
+                                        logger.info(
+                                            f"Task {task.task_id} (multi-action) completed: "
+                                            f"last action (GO_HOME) aborted but robot already at charging dock"
+                                        )
+                                        return True
+                                except Exception as e:
+                                    logger.debug(f"Failed to get current action for robot {task.robot_id}: {e}")
+                        except Exception as e:
+                            logger.warning(f"Failed to check robot state for aborted GO_HOME action: {e}")
+                
+                # 检查是否是因为限行区域等待（再次检查，以防之前没有检测到）
+                if robot_id and self.restricted_area_traffic_manager:
+                    waiting_status = self.restricted_area_traffic_manager.robot_waiting_status.get(robot_id)
+                    if waiting_status:
+                        logger.info(
+                            f"Task {task.task_id} all actions aborted but robot {robot_id} is waiting at restricted area. "
+                            f"Task will resume when area is released. NOT cancelling task."
+                        )
+                        task.action_id = None
+                        self._save_tasks_to_file()
+                        return False
+                
+                # 所有动作都中止了，且不是限行区域等待
+                task.status = TaskStatus.FAILED
+                task.error_message = "All actions aborted (not waiting at restricted area)"
+                task.completed_at = datetime.now()
+                if task.task_id in self.task_paths:
+                    del self.task_paths[task.task_id]
+                self._save_tasks_to_file()
+                logger.warning(
+                    f"Task {task.task_id} (multi-action) failed: all actions aborted (not waiting at restricted area). "
+                    f"Task marked as FAILED, NOT cancelled. Robot will NOT automatically return to dock."
+                )
+                return True
+        
+        # 普通任务或无法继续的多动作任务：检查是否已经到达目标
+        try:
+            robot_state = await self.robot_manager.get_robot_state(task.robot_id)
+            if robot_state and robot_state.pose and task.target_pose:
+                current = robot_state.pose
+                target = task.target_pose
+                distance = math.sqrt((current.x - target.x) ** 2 + (current.y - target.y) ** 2)
+                acceptable_precision = 0.3
+                
+                if distance <= acceptable_precision:
+                    task.status = TaskStatus.COMPLETED
+                    task.completed_at = datetime.now()
+                    await self._release_robot_from_restricted_area_on_completion(task)
+                    if task.task_id in self.task_paths:
+                        del self.task_paths[task.task_id]
+                    self._save_tasks_to_file()
+                    logger.info(
+                        f"Task {task.task_id} action aborted but robot reached target "
+                        f"(distance={distance:.2f}m <= {acceptable_precision}m). Marking as completed."
+                    )
+                    return True
+                else:
+                    # 机器人未到达目标，检查是否被阻塞（死锁）
+                    if task.robot_id in self.robots_in_deadlock_resolution:
+                        logger.info(
+                            f"Task {task.task_id} aborted but robot {task.robot_id} is in deadlock resolution, "
+                            f"will not cancel task, waiting for resolution to complete"
+                        )
+                        return False
+                    
+                    execution_time = 0.0
+                    if task.started_at:
+                        execution_time = (datetime.now() - task.started_at).total_seconds()
+                    
+                    if distance < 8.0 and execution_time > 10.0:
+                        logger.warning(
+                            f"Task {task.task_id} aborted but robot is close to target "
+                            f"(distance={distance:.2f}m, execution_time={execution_time:.1f}s). "
+                            f"May be blocked by other robots. Triggering deadlock detection and retry..."
+                        )
+                        asyncio.create_task(self._trigger_deadlock_detection_for_robot(task.robot_id))
+                        
+                        if task.retry_count < 5:
+                            task.retry_count += 1
+                            logger.info(
+                                f"Retrying task {task.task_id} (retry {task.retry_count}/5) "
+                                f"after abort, distance to target: {distance:.2f}m"
+                            )
+                            try:
+                                move_result = await agent.move_to(
+                                    target=task.target_pose,
+                                    mode=0,
+                                    acceptable_precision=0.3,
+                                    speed_ratio=1.0
+                                )
+                                task.action_id = move_result.action_id
+                                task.status = TaskStatus.EXECUTING
+                                self._save_tasks_to_file()
+                                logger.info(
+                                    f"Task {task.task_id} retried after abort, "
+                                    f"new action_id={task.action_id}, status=EXECUTING"
+                                )
+                                return False
+                            except Exception as e:
+                                logger.error(f"Failed to retry task {task.task_id} after abort: {e}")
+                    
+                    # 如果无法恢复，标记为取消
+                        task.status = TaskStatus.CANCELLED
+                        task.completed_at = datetime.now()
+                        if task.task_id in self.task_paths:
+                            del self.task_paths[task.task_id]
+                    self._save_tasks_to_file()
+                    logger.info(
+                        f"Task {task.task_id} aborted and robot not at target "
+                        f"(distance={distance:.2f}m > {acceptable_precision}m)"
+                    )
+                    return True
+            else:
+                task.status = TaskStatus.CANCELLED
+                task.completed_at = datetime.now()
+                if task.task_id in self.task_paths:
+                    del self.task_paths[task.task_id]
+                self._save_tasks_to_file()
+                logger.info(f"Task {task.task_id} aborted (robot state unavailable)")
+                return True
+        except Exception as e:
+            logger.warning(f"Failed to check robot position for aborted task {task.task_id}: {e}")
+            task.status = TaskStatus.CANCELLED
+            task.completed_at = datetime.now()
+            if task.task_id in self.task_paths:
+                del self.task_paths[task.task_id]
+            self._save_tasks_to_file()
+            logger.info(f"Task {task.task_id} aborted (check failed)")
+            return True
+
+    async def _handle_action_status_working(self, task, agent, action_state):
+        """
+        处理action状态为Working（status=1）的情况
+        重点关注多动作任务的位置检查
+        """
+        if task.is_multi_action and task.actions:
+            logger.info(
+                f"[MULTI-ACTION] Task {task.task_id} status=1 (Working), checking position for action "
+                f"{task.current_action_index + 1}/{len(task.actions)} (action_id={task.action_id})"
+            )
+            is_completed = await self._check_action_completion_by_position(task, agent, task.robot_id)
+            if is_completed:
+                completed_action_idx = task.current_action_index
+                logger.info(
+                    f"[MULTI-ACTION] Task {task.task_id} position check indicates action {completed_action_idx + 1} completed, "
+                    f"switching to next action"
+                )
+                await self._handle_multi_action_completion(task, agent, task.robot_id, completed_action_idx)
+                return True
+            else:
+                logger.info(
+                    f"[MULTI-ACTION] Task {task.task_id} action {task.current_action_index + 1}/{len(task.actions)} "
+                    f"still in progress (status=1, position check indicates not at target)"
+                )
+        logger.debug(f"Task {task.task_id} is still working (status=1)")
+        return False
+
     async def _process_single_task_update(self, task):
         """处理单个任务的状态更新（内部辅助方法）"""
         try:
@@ -1880,15 +3390,57 @@ class TaskScheduler:
             if not agent:
                 logger.warning(f"Robot agent not found for task {task.task_id}, robot_id={task.robot_id}")
                 return
-            
+                
             # 如果是多动作任务且当前是等待动作，不需要查询action状态（等待动作没有action_id）
             if task.is_multi_action and task.actions:
                 if task.current_action_index < len(task.actions):
                     current_action = task.actions[task.current_action_index]
                     if current_action and current_action.action_type == ActionType.WAIT:
                         # 等待动作由后台任务处理，这里不需要更新状态
+                        # 但需要确保任务状态正确，防止被其他逻辑误判
+                        if task.status != TaskStatus.EXECUTING:
+                            task.status = TaskStatus.EXECUTING
+                            self._save_tasks_to_file()
+                        
+                        # 重要：WAIT动作期间，不允许其他逻辑修改current_action_index
+                        # 检查是否有其他逻辑错误地修改了索引
+                        if task.current_action_index >= len(task.actions):
+                            logger.warning(
+                                f"[MULTI-ACTION] Task {task.task_id} WAIT action: current_action_index "
+                                f"({task.current_action_index}) >= actions length ({len(task.actions)}). "
+                                f"This should not happen during WAIT."
+                            )
+                        
+                        logger.debug(
+                            f"[MULTI-ACTION] Task {task.task_id} is in WAIT action "
+                            f"(action_index={task.current_action_index}), skipping status update"
+                        )
                         return
-            
+                    # 对于GO_HOME动作，如果没有action_id，尝试从机器人获取当前action
+                    elif current_action and current_action.action_type == ActionType.GO_HOME:
+                        if not task.action_id:
+                            try:
+                                current_action_state = await agent.get_current_action()
+                                if current_action_state and current_action_state.action_id:
+                                    task.action_id = current_action_state.action_id
+                                    logger.info(f"Task {task.task_id} GO_HOME action assigned action_id: {current_action_state.action_id}")
+                                    self._save_tasks_to_file()
+                            except Exception as e:
+                                logger.debug(f"Failed to get current action for GO_HOME task {task.task_id}: {e}")
+                                # 如果无法获取action_id，检查机器人是否已经在充电桩附近
+                                try:
+                                    robot_state = await self.robot_manager.get_robot_state(task.robot_id)
+                                    if robot_state and robot_state.pose:
+                                        # 检查机器人是否在充电桩附近（通常充电桩在原点附近，或者可以通过机器人状态判断）
+                                        # 如果机器人状态显示idle且没有current_action_id，可能已经回桩完成
+                                        if robot_state.status == "idle" and not robot_state.current_action_id:
+                                            logger.info(f"Task {task.task_id} GO_HOME action: robot {task.robot_id} appears to be at charging dock (idle, no action_id)")
+                                            # 标记GO_HOME动作完成
+                                            await self._handle_multi_action_completion(task, agent, task.robot_id, task.current_action_index)
+                                            return
+                                except Exception as e2:
+                                    logger.debug(f"Failed to check robot state for GO_HOME task {task.task_id}: {e2}")
+                
             # 如果任务已分配但还没有action_id，检查机器人当前action
             if not task.action_id:
                 try:
@@ -1899,9 +3451,9 @@ class TaskScheduler:
                         # 如果获取到action_id，更新任务状态为执行中
                         if task.status == TaskStatus.ASSIGNED:
                             task.status = TaskStatus.EXECUTING
-                            # 持久化到文件
-                            self._save_tasks_to_file()
-                            logger.info(f"Task {task.task_id} status updated to EXECUTING")
+                        # 持久化到文件
+                        self._save_tasks_to_file()
+                        logger.info(f"Task {task.task_id} status updated to EXECUTING")
                 except Exception as e:
                     logger.debug(f"Failed to get current action for task {task.task_id}: {e}")
                     return
@@ -1909,7 +3461,7 @@ class TaskScheduler:
             # 如果有action_id，查询action状态
             if not task.action_id:
                 return
-                
+            
             try:
                 action_state = await agent.get_action_status(task.action_id)
             except httpx.HTTPStatusError as e:
@@ -1938,7 +3490,7 @@ class TaskScheduler:
             except Exception as e:
                 logger.error(f"Failed to get action status for task {task.task_id}: {e}", exc_info=True)
                 return
-                
+            
             # 检查状态 - 优先使用state字典中的值，如果不存在则使用直接属性
             # 注意：API返回的state字典中，status和result可能是整数或字符串
             status = None
@@ -1953,12 +3505,12 @@ class TaskScheduler:
             
             if status is None:
                 status = action_state.status
-                # 如果status是字符串，尝试转换为整数
-                if isinstance(status, str):
-                    try:
-                        status = int(status)
-                    except (ValueError, TypeError):
-                        pass
+            # 如果status是字符串，尝试转换为整数
+            if isinstance(status, str):
+                try:
+                    status = int(status)
+                except (ValueError, TypeError):
+                    pass
             
             result = None
             if action_state.state:
@@ -1972,12 +3524,12 @@ class TaskScheduler:
             
             if result is None:
                 result = action_state.result
-                # 如果result是字符串，尝试转换为整数
-                if isinstance(result, str):
-                    try:
-                        result = int(result)
-                    except (ValueError, TypeError):
-                        pass
+            # 如果result是字符串，尝试转换为整数
+            if isinstance(result, str):
+                try:
+                    result = int(result)
+                except (ValueError, TypeError):
+                    pass
             
             # 对于多动作任务，使用INFO级别记录状态，便于调试
             log_level = logger.info if task.is_multi_action else logger.debug
@@ -2001,559 +3553,96 @@ class TaskScheduler:
                 except (ValueError, TypeError):
                     logger.warning(f"Task {task.task_id} action_id={task.action_id} result is not an integer: {result}")
             
-            # 如果status为None，说明action可能已经完成或被清除
-            if status is None:
-                logger.warning(
-                    f"Task {task.task_id} action_id={task.action_id} status is None. "
-                    f"Action may have been completed or cleared. Checking robot current action..."
-                )
-                # 检查机器人当前是否有正在执行的任务
-                try:
-                    current_action = await agent.get_current_action()
-                    if current_action is None or current_action.action_id != task.action_id:
-                        # 机器人当前没有执行这个action，可能已经完成
-                        # 通过检查机器人位置来判断是否到达目标
+            # 对于GO_HOME动作，即使status=1（Working），也要检查机器人是否已经在充电桩
+            # 因为GO_HOME动作可能已经完成，但action状态还没有更新
+            if task.is_multi_action and task.actions and task.current_action_index < len(task.actions):
+                current_action_item = task.actions[task.current_action_index]
+                if current_action_item.action_type == ActionType.GO_HOME:
+                    # 检查机器人是否已经在充电桩
+                    try:
                         robot_state = await self.robot_manager.get_robot_state(task.robot_id)
-                        if robot_state:
-                            # 对于多动作任务，使用当前动作的目标位置
-                            if task.is_multi_action and task.actions and task.current_action_index < len(task.actions):
-                                current_action_item = task.actions[task.current_action_index]
-                                if current_action_item.action_type == ActionType.MOVE_TO:
-                                    if current_action_item.target_pose:
-                                        target = current_action_item.target_pose
-                                    elif current_action_item.poi_name:
-                                        # POI导航：尝试获取POI位置
-                                        try:
-                                            pois = await asyncio.wait_for(agent.get_all_pois(), timeout=2.0)
-                                            for poi in pois:
-                                                if poi.id == current_action_item.poi_name or (poi.metadata and poi.metadata.get("display_name") == current_action_item.poi_name):
-                                                    if poi.pose:
-                                                        target = poi.pose
-                                                        break
-                                            else:
-                                                target = task.target_pose  # 回退到任务目标
-                                        except:
-                                            target = task.target_pose  # 回退到任务目标
-                                    else:
-                                        target = task.target_pose
-                                else:
-                                    target = task.target_pose  # 非移动动作使用任务目标
-                            else:
-                                target = task.target_pose
+                        if robot_state and robot_state.pose:
+                            # 获取实际的充电桩坐标
+                            dock_pose = None
+                            try:
+                                dock_pose = await agent.get_home_dock_pose()
+                            except Exception as e:
+                                logger.debug(f"Failed to get home dock pose for robot {task.robot_id}: {e}")
                             
-                            current = robot_state.pose
-                            distance = ((current.x - target.x) ** 2 + (current.y - target.y) ** 2) ** 0.5
-                            logger.info(
-                                f"Task {task.task_id}: action status is None, "
-                                f"distance to target: {distance:.2f}m"
-                            )
-                            # 检查执行时间，如果长时间未完成可能是死锁
-                            execution_time = 0.0
-                            if task.started_at:
-                                execution_time = (datetime.now() - task.started_at).total_seconds()
-                            
-                            # 如果距离目标很近（在acceptable_precision范围内），认为当前动作完成
-                            # 对于多动作任务，继续下一个动作；对于普通任务，标记为完成
-                            acceptable_precision = 0.3
-                            if distance <= acceptable_precision:
-                                if task.is_multi_action and task.actions:
-                                    # 多动作任务：使用统一的方法处理动作完成
-                                    completed_action_idx = task.current_action_index
-                                    logger.info(
-                                        f"[MULTI-ACTION] Task {task.task_id} action {completed_action_idx + 1}/{len(task.actions)} "
-                                        f"completed (status=None, distance={distance:.2f}m <= {acceptable_precision}m)"
-                                    )
-                                    await self._handle_multi_action_completion(task, agent, task.robot_id, completed_action_idx)
-                                    return  # 已处理，不需要继续
-                                else:
-                                    # 普通任务完成
-                                    task.status = TaskStatus.COMPLETED
-                                    task.completed_at = datetime.now()
-                                    if task.task_id in self.task_paths:
-                                        del self.task_paths[task.task_id]
-                                    self._save_tasks_to_file()
-                                    logger.info(
-                                        f"Task {task.task_id} completed (distance to target: {distance:.2f}m <= {acceptable_precision}m)"
-                                    )
-                            elif execution_time > 15.0:
-                                # 如果执行时间超过15秒且未到达目标，可能是死锁，触发死锁检测
-                                logger.warning(
-                                    f"Task {task.task_id} action status is None, robot not at target "
-                                    f"(distance={distance:.2f}m, execution_time={execution_time:.1f}s). "
-                                    f"Robot may be blocked. Triggering deadlock detection..."
+                            # 如果获取到充电桩坐标，使用实际坐标；否则使用原点作为后备
+                            if dock_pose:
+                                distance_to_dock = math.sqrt(
+                                    (robot_state.pose.x - dock_pose.x) ** 2 + 
+                                    (robot_state.pose.y - dock_pose.y) ** 2
                                 )
-                                # 禁用死锁检测（临时禁用，专注于修复多动作任务）
-                                # asyncio.create_task(self._trigger_deadlock_detection_for_robot(task.robot_id))
-                                # 尝试恢复任务
-                                await self._recover_task_with_invalid_action_id(task, agent, task.robot_id)
-                except Exception as e:
-                    logger.debug(f"Failed to check current action for task {task.task_id}: {e}")
-                return
-                
+                                dock_distance = distance_to_dock
+                                dock_location = f"({dock_pose.x:.2f}, {dock_pose.y:.2f})"
+                            else:
+                                # 后备方案：使用原点距离
+                                distance_to_origin = math.sqrt(robot_state.pose.x ** 2 + robot_state.pose.y ** 2)
+                                dock_distance = distance_to_origin
+                                dock_location = "origin (0,0)"
+                            
+                            # GO_HOME动作必须真正到达充电桩才能完成
+                            # 要求：1) 机器人在充电桩附近（距离<1.5m） 2) 状态为idle 3) 没有正在执行的action
+                            if dock_distance < 1.5 and robot_state.status.value == "idle":
+                                # 检查机器人当前是否有正在执行的action
+                                current_action = await agent.get_current_action()
+                                if current_action is None or (hasattr(current_action, 'action_id') and current_action.action_id != task.action_id):
+                                    logger.info(
+                                        f"Task {task.task_id} GO_HOME action: robot {task.robot_id} is at charging dock "
+                                        f"(distance={dock_distance:.2f}m < 1.5m from {dock_location}, status=idle, no current_action or different action_id). "
+                                        f"Action status={status}, robot is at dock. Marking GO_HOME as completed."
+                                    )
+                                    # 标记GO_HOME动作完成
+                                    await self._handle_multi_action_completion(task, agent, task.robot_id, task.current_action_index)
+                                    return
+                                else:
+                                    logger.debug(
+                                        f"Task {task.task_id} GO_HOME action: robot {task.robot_id} is near dock "
+                                        f"(distance={dock_distance:.2f}m) but still has active action. Waiting for completion."
+                                    )
+                            else:
+                                # 机器人不在充电桩附近，即使状态是idle也不应该认为完成
+                                if robot_state.status.value == "idle" and not robot_state.current_action_id:
+                                    logger.warning(
+                                        f"Task {task.task_id} GO_HOME action: robot {task.robot_id} is idle with no action_id, "
+                                        f"but distance={dock_distance:.2f}m > 1.5m from {dock_location}. "
+                                        f"Robot may not have reached charging dock. Action still in progress."
+                                    )
+                    except Exception as e:
+                        logger.debug(f"Failed to check robot state for GO_HOME task {task.task_id}: {e}")
+            
+                # 如果status为None，说明action可能已经完成或被清除
+                if status is None:
+                    handled = await self._handle_action_status_none(task, agent, action_state)
+                    if handled:
+                        return
+            
             if status == 4:  # Done
                 if result == 0:  # Success
-                    # 如果是多动作任务，使用统一的方法处理动作完成
-                    if task.is_multi_action and task.actions:
-                        completed_action_idx = task.current_action_index
-                        logger.info(
-                            f"[MULTI-ACTION] Task {task.task_id} action {completed_action_idx + 1}/{len(task.actions)} "
-                            f"(action_id={task.action_id}) completed successfully (status=4, result=0)"
-                        )
-                        await self._handle_multi_action_completion(task, agent, task.robot_id, completed_action_idx)
-                        return  # 已处理，不需要继续
-                    else:
-                        # 普通任务完成
-                        task.status = TaskStatus.COMPLETED
-                        task.completed_at = datetime.now()
-                        logger.info(f"Task {task.task_id} completed successfully")
-                    
-                    # 清理任务的规划路径
-                    if task.task_id in self.task_paths:
-                        del self.task_paths[task.task_id]
-                    # 持久化到文件
-                    self._save_tasks_to_file()
+                    handled = await self._handle_action_status_done_success(task, agent, action_state)
+                    if handled:
+                        return
                 elif result == -1:  # Failed
                     reason = action_state.state.get("reason", "") if action_state.state else action_state.reason
-                    
-                    # 对于多动作任务，如果当前动作失败，尝试继续下一个动作（如果还有）
-                    if task.is_multi_action and task.actions and task.current_action_index < len(task.actions):
-                        current_action_item = task.actions[task.current_action_index]
-                        # 检查是否是因为无法到达目标而失败（可能是死锁导致）
-                        # 如果机器人距离目标较近，可能是被阻塞，尝试触发死锁检测和恢复
-                        try:
-                            # 首先检查机器人是否正在死锁解除中，如果是，不要标记为失败
-                            if task.robot_id in self.robots_in_deadlock_resolution:
-                                logger.info(
-                                    f"Task {task.task_id} action {task.current_action_index} failed but robot {task.robot_id} is in deadlock resolution, "
-                                    f"will not mark as failed, waiting for resolution to complete"
-                                )
-                                return  # 继续监控，不标记为失败
-                            
-                            robot_state = await self.robot_manager.get_robot_state(task.robot_id)
-                            if robot_state and robot_state.pose:
-                                # 获取当前动作的目标位置
-                                if current_action_item.action_type == ActionType.MOVE_TO:
-                                    if current_action_item.target_pose:
-                                        target = current_action_item.target_pose
-                                    elif current_action_item.poi_name:
-                                        try:
-                                            pois = await asyncio.wait_for(agent.get_all_pois(), timeout=2.0)
-                                            for poi in pois:
-                                                if poi.id == current_action_item.poi_name or (poi.metadata and poi.metadata.get("display_name") == current_action_item.poi_name):
-                                                    if poi.pose:
-                                                        target = poi.pose
-                                                        break
-                                            else:
-                                                target = task.target_pose
-                                        except:
-                                            target = task.target_pose
-                                    else:
-                                        target = task.target_pose
-                                else:
-                                    target = task.target_pose
-                                
-                                current = robot_state.pose
-                                distance = math.sqrt((current.x - target.x) ** 2 + (current.y - target.y) ** 2)
-                                
-                                # 如果距离目标较近（< 8米），可能是被阻塞，尝试恢复
-                                if distance < 8.0:
-                                    execution_time = 0.0
-                                    if task.started_at:
-                                        execution_time = (datetime.now() - task.started_at).total_seconds()
-                                    
-                                    # 如果执行时间较长，可能是死锁，触发死锁检测（降低阈值到10秒）
-                                    if execution_time > 10.0:
-                                        logger.warning(
-                                            f"Task {task.task_id} failed but robot is close to target "
-                                            f"(distance={distance:.2f}m, execution_time={execution_time:.1f}s). "
-                                            f"May be blocked by other robots. Triggering deadlock detection and retry..."
-                                        )
-                                        # 禁用死锁检测（临时禁用，专注于修复多动作任务）
-                                        # asyncio.create_task(self._trigger_deadlock_detection_for_robot(task.robot_id))
-                                        
-                                        # 尝试重新发送move_to指令（增加重试次数到5次）
-                                        if task.retry_count < 5:  # 最多重试5次
-                                            task.retry_count += 1
-                                            logger.info(
-                                                f"Retrying task {task.task_id} (retry {task.retry_count}/5) "
-                                                f"after failure, distance to target: {distance:.2f}m"
-                                            )
-                                            try:
-                                                move_result = await agent.move_to(
-                                                    target=task.target_pose,
-                                                    mode=0,
-                                                    acceptable_precision=0.3,
-                                                    speed_ratio=1.0
-                                                )
-                                                task.action_id = move_result.action_id
-                                                task.status = TaskStatus.EXECUTING
-                                                # 不更新completed_at，因为任务还在执行
-                                                self._save_tasks_to_file()
-                                                logger.info(
-                                                    f"Task {task.task_id} retried after failure, "
-                                                    f"new action_id={task.action_id}, status=EXECUTING"
-                                                )
-                                                return  # 继续监控，不标记为失败
-                                            except Exception as e:
-                                                logger.error(
-                                                    f"Failed to retry task {task.task_id} after failure: {e}"
-                                                )
-                                                # 重试失败，继续标记为失败
-                                
-                                # 如果距离很近（< 0.5米），认为已到达目标
-                                if distance <= 0.5:
-                                    task.status = TaskStatus.COMPLETED
-                                    task.completed_at = datetime.now()
-                                    task.error_message = None
-                                    if task.task_id in self.task_paths:
-                                        del self.task_paths[task.task_id]
-                                    self._save_tasks_to_file()
-                                    logger.info(
-                                        f"Task {task.task_id} action failed but robot reached target "
-                                        f"(distance={distance:.2f}m <= 0.5m). Marking as completed."
-                                    )
-                                    return
-                        except Exception as e:
-                            logger.warning(f"Failed to check robot position for failed task {task.task_id}: {e}")
-                        
-                        # 如果无法恢复，对于多动作任务，尝试继续下一个动作
-                        logger.warning(
-                            f"Task {task.task_id} action {task.current_action_index} failed: {reason or 'Unknown error'}. "
-                            f"Attempting to continue with next action..."
-                        )
-                        task.current_action_index += 1
-                        if task.current_action_index < len(task.actions):
-                            task.action_id = None  # 清除当前action_id
-                            self._save_tasks_to_file()
-                            logger.info(
-                                f"Task {task.task_id} continuing to next action ({task.current_action_index}/{len(task.actions)})"
-                            )
-                            await self._execute_next_action(task, agent, task.robot_id)
-                            return  # 继续执行下一个动作
-                        else:
-                            # 所有动作都失败了，标记为失败
-                            task.status = TaskStatus.FAILED
-                            task.error_message = f"All actions failed. Last error: {reason or 'Unknown error'}"
-                            task.completed_at = datetime.now()
-                            if task.task_id in self.task_paths:
-                                del self.task_paths[task.task_id]
-                            self._save_tasks_to_file()
-                            logger.warning(f"Task {task.task_id} (multi-action) failed: all actions failed")
-                            return
-                    
-                    # 普通任务或无法继续的多动作任务：检查是否是因为无法到达目标而失败
-                    try:
-                        # 首先检查机器人是否正在死锁解除中，如果是，不要标记为失败
-                        if task.robot_id in self.robots_in_deadlock_resolution:
-                            logger.info(
-                                f"Task {task.task_id} failed but robot {task.robot_id} is in deadlock resolution, "
-                                f"will not mark as failed, waiting for resolution to complete"
-                            )
-                            return  # 继续监控，不标记为失败
-                        
-                        robot_state = await self.robot_manager.get_robot_state(task.robot_id)
-                        if robot_state and robot_state.pose and task.target_pose:
-                            current = robot_state.pose
-                            target = task.target_pose
-                            distance = math.sqrt((current.x - target.x) ** 2 + (current.y - target.y) ** 2)
-                            
-                            # 如果距离目标较近（< 8米），可能是被阻塞，尝试恢复
-                            if distance < 8.0:
-                                execution_time = 0.0
-                                if task.started_at:
-                                    execution_time = (datetime.now() - task.started_at).total_seconds()
-                                
-                                # 如果执行时间较长，可能是死锁，触发死锁检测（降低阈值到10秒）
-                                if execution_time > 10.0:
-                                    logger.warning(
-                                        f"Task {task.task_id} failed but robot is close to target "
-                                        f"(distance={distance:.2f}m, execution_time={execution_time:.1f}s). "
-                                        f"May be blocked by other robots. Triggering deadlock detection and retry..."
-                                    )
-                                    # 触发死锁检测（异步，不阻塞）
-                                    asyncio.create_task(self._trigger_deadlock_detection_for_robot(task.robot_id))
-                                    
-                                    # 尝试重新发送move_to指令（增加重试次数到5次）
-                                    if task.retry_count < 5:  # 最多重试5次
-                                        task.retry_count += 1
-                                        logger.info(
-                                            f"Retrying task {task.task_id} (retry {task.retry_count}/5) "
-                                            f"after failure, distance to target: {distance:.2f}m"
-                                        )
-                                        try:
-                                            move_result = await agent.move_to(
-                                                target=task.target_pose,
-                                                mode=0,
-                                                acceptable_precision=0.3,
-                                                speed_ratio=1.0
-                                            )
-                                            task.action_id = move_result.action_id
-                                            task.status = TaskStatus.EXECUTING
-                                            # 不更新completed_at，因为任务还在执行
-                                            self._save_tasks_to_file()
-                                            logger.info(
-                                                f"Task {task.task_id} retried after failure, "
-                                                f"new action_id={task.action_id}, status=EXECUTING"
-                                            )
-                                            return  # 继续监控，不标记为失败
-                                        except Exception as e:
-                                            logger.error(
-                                                f"Failed to retry task {task.task_id} after failure: {e}"
-                                            )
-                                            # 重试失败，继续标记为失败
-                                
-                                # 如果距离很近（< 0.5米），认为已到达目标
-                                if distance <= 0.5:
-                                    task.status = TaskStatus.COMPLETED
-                                    task.completed_at = datetime.now()
-                                    task.error_message = None
-                                    if task.task_id in self.task_paths:
-                                        del self.task_paths[task.task_id]
-                                    self._save_tasks_to_file()
-                                    logger.info(
-                                        f"Task {task.task_id} action failed but robot reached target "
-                                        f"(distance={distance:.2f}m <= 0.5m). Marking as completed."
-                                    )
-                                    return
-                    except Exception as e:
-                        logger.warning(f"Failed to check robot position for failed task {task.task_id}: {e}")
-                    
-                    # 如果无法恢复，标记为失败
-                    task.status = TaskStatus.FAILED
-                    task.error_message = reason or "Unknown error"
-                    task.completed_at = datetime.now()
-                    # 清理任务的规划路径
-                    if task.task_id in self.task_paths:
-                        del self.task_paths[task.task_id]
-                    # 持久化到文件
-                    self._save_tasks_to_file()
-                    logger.warning(f"Task {task.task_id} failed: {task.error_message}")
+                    handled = await self._handle_action_status_done_failed(task, agent, action_state, reason)
+                    if handled:
+                        return
                 elif result == -2:  # Aborted
-                    # 重要：即使action被中止，也要检查机器人是否已经到达目标
-                    # 如果已经到达，应该标记为COMPLETED而不是CANCELLED
-                    # 对于多动作任务，如果当前动作中止，尝试继续下一个动作
-                    if task.is_multi_action and task.actions and task.current_action_index < len(task.actions):
-                        current_action_item = task.actions[task.current_action_index]
-                        try:
-                            robot_state = await self.robot_manager.get_robot_state(task.robot_id)
-                            if robot_state and robot_state.pose:
-                                # 获取当前动作的目标位置
-                                if current_action_item.action_type == ActionType.MOVE_TO:
-                                    if current_action_item.target_pose:
-                                        target = current_action_item.target_pose
-                                    elif current_action_item.poi_name:
-                                        try:
-                                            pois = await asyncio.wait_for(agent.get_all_pois(), timeout=2.0)
-                                            for poi in pois:
-                                                if poi.id == current_action_item.poi_name or (poi.metadata and poi.metadata.get("display_name") == current_action_item.poi_name):
-                                                    if poi.pose:
-                                                        target = poi.pose
-                                                        break
-                                            else:
-                                                target = task.target_pose
-                                        except:
-                                            target = task.target_pose
-                                    else:
-                                        target = task.target_pose
-                                else:
-                                    target = task.target_pose
-                                
-                                current = robot_state.pose
-                                distance = math.sqrt((current.x - target.x) ** 2 + (current.y - target.y) ** 2)
-                                acceptable_precision = 0.3
-                                
-                                if distance <= acceptable_precision:
-                                    # 机器人已经到达目标，继续下一个动作
-                                    logger.info(
-                                        f"Task {task.task_id} action {task.current_action_index} aborted but robot reached target "
-                                        f"(distance={distance:.2f}m <= {acceptable_precision}m). Continuing to next action."
-                                    )
-                                    task.current_action_index += 1
-                                    if task.current_action_index < len(task.actions):
-                                        task.action_id = None
-                                        self._save_tasks_to_file()
-                                        await self._execute_next_action(task, agent, task.robot_id)
-                                        return
-                                    else:
-                                        # 所有动作完成
-                                        task.status = TaskStatus.COMPLETED
-                                        task.completed_at = datetime.now()
-                                        if task.task_id in self.task_paths:
-                                            del self.task_paths[task.task_id]
-                                        self._save_tasks_to_file()
-                                        logger.info(f"Task {task.task_id} (multi-action) completed all actions")
-                                        return
-                        except Exception as e:
-                            logger.warning(f"Failed to check robot position for aborted task {task.task_id}: {e}")
-                        
-                        # 如果无法判断是否到达目标，尝试继续下一个动作
-                        logger.warning(
-                            f"Task {task.task_id} action {task.current_action_index} aborted. "
-                            f"Attempting to continue with next action..."
-                        )
-                        task.current_action_index += 1
-                        if task.current_action_index < len(task.actions):
-                            task.action_id = None
-                            self._save_tasks_to_file()
-                            logger.info(
-                                f"Task {task.task_id} continuing to next action ({task.current_action_index}/{len(task.actions)})"
-                            )
-                            await self._execute_next_action(task, agent, task.robot_id)
-                            return
-                        else:
-                            # 所有动作都中止了，标记为取消
-                            task.status = TaskStatus.CANCELLED
-                            task.completed_at = datetime.now()
-                            if task.task_id in self.task_paths:
-                                del self.task_paths[task.task_id]
-                            self._save_tasks_to_file()
-                            logger.info(f"Task {task.task_id} (multi-action) cancelled: all actions aborted")
-                            return
-                    
-                    # 普通任务或无法继续的多动作任务：检查是否已经到达目标
-                    try:
-                        robot_state = await self.robot_manager.get_robot_state(task.robot_id)
-                        if robot_state and robot_state.pose and task.target_pose:
-                            current = robot_state.pose
-                            target = task.target_pose
-                            distance = math.sqrt((current.x - target.x) ** 2 + (current.y - target.y) ** 2)
-                            acceptable_precision = 0.3  # 使用默认精度0.3米
-                            
-                            if distance <= acceptable_precision:
-                                # 机器人已经到达目标，标记为完成
-                                task.status = TaskStatus.COMPLETED
-                                task.completed_at = datetime.now()
-                                # 清理任务的规划路径
-                                if task.task_id in self.task_paths:
-                                    del self.task_paths[task.task_id]
-                                # 持久化到文件
-                                self._save_tasks_to_file()
-                                logger.info(
-                                    f"Task {task.task_id} action aborted but robot reached target "
-                                    f"(distance={distance:.2f}m <= {acceptable_precision}m). Marking as completed."
-                                )
-                                return
-                            else:
-                                # 机器人未到达目标，检查是否被阻塞（死锁）
-                                # 首先检查机器人是否正在死锁解除中，如果是，不要取消任务
-                                if task.robot_id in self.robots_in_deadlock_resolution:
-                                    logger.info(
-                                        f"Task {task.task_id} aborted but robot {task.robot_id} is in deadlock resolution, "
-                                        f"will not cancel task, waiting for resolution to complete"
-                                    )
-                                    return  # 继续监控，不标记为取消
-                                    
-                                execution_time = 0.0
-                                if task.started_at:
-                                    execution_time = (datetime.now() - task.started_at).total_seconds()
-                                
-                                # 如果距离目标较近（< 8米）且执行时间较长，可能是死锁，尝试恢复
-                                # 降低距离阈值和执行时间阈值，更早触发死锁检测和重试
-                                if distance < 8.0 and execution_time > 10.0:
-                                    logger.warning(
-                                        f"Task {task.task_id} aborted but robot is close to target "
-                                        f"(distance={distance:.2f}m, execution_time={execution_time:.1f}s). "
-                                        f"May be blocked by other robots. Triggering deadlock detection and retry..."
-                                    )
-                                    # 触发死锁检测（异步，不阻塞）
-                                    asyncio.create_task(self._trigger_deadlock_detection_for_robot(task.robot_id))
-                                    
-                                    # 尝试重新发送move_to指令（增加重试次数到5次）
-                                    if task.retry_count < 5:  # 最多重试5次
-                                        task.retry_count += 1
-                                        logger.info(
-                                            f"Retrying task {task.task_id} (retry {task.retry_count}/5) "
-                                            f"after abort, distance to target: {distance:.2f}m"
-                                        )
-                                        try:
-                                            move_result = await agent.move_to(
-                                                target=task.target_pose,
-                                                mode=0,
-                                                acceptable_precision=0.3,
-                                                speed_ratio=1.0
-                                            )
-                                            task.action_id = move_result.action_id
-                                            task.status = TaskStatus.EXECUTING
-                                            # 不更新completed_at，因为任务还在执行
-                                            self._save_tasks_to_file()
-                                            logger.info(
-                                                f"Task {task.task_id} retried after abort, "
-                                                f"new action_id={task.action_id}, status=EXECUTING"
-                                            )
-                                            return  # 继续监控，不标记为取消
-                                        except Exception as e:
-                                            logger.error(
-                                                f"Failed to retry task {task.task_id} after abort: {e}"
-                                            )
-                                            # 重试失败，继续标记为取消
-                                
-                                # 如果无法恢复，标记为取消
-                                task.status = TaskStatus.CANCELLED
-                                task.completed_at = datetime.now()
-                                # 清理任务的规划路径
-                                if task.task_id in self.task_paths:
-                                    del self.task_paths[task.task_id]
-                                # 持久化到文件
-                                self._save_tasks_to_file()
-                                logger.info(
-                                    f"Task {task.task_id} aborted and robot not at target "
-                                    f"(distance={distance:.2f}m > {acceptable_precision}m)"
-                                )
-                                return
-                        else:
-                            # 无法获取机器人状态，标记为取消
-                            task.status = TaskStatus.CANCELLED
-                            task.completed_at = datetime.now()
-                            # 清理任务的规划路径
-                            if task.task_id in self.task_paths:
-                                del self.task_paths[task.task_id]
-                            # 持久化到文件
-                            self._save_tasks_to_file()
-                            logger.info(f"Task {task.task_id} aborted (robot state unavailable)")
-                            return
-                    except Exception as e:
-                        # 检查失败，标记为取消（保守处理）
-                        logger.warning(f"Failed to check robot position for aborted task {task.task_id}: {e}")
-                        task.status = TaskStatus.CANCELLED
-                        task.completed_at = datetime.now()
-                        # 清理任务的规划路径
-                        if task.task_id in self.task_paths:
-                            del self.task_paths[task.task_id]
-                        # 持久化到文件
-                        self._save_tasks_to_file()
-                        logger.info(f"Task {task.task_id} aborted (check failed)")
+                    handled = await self._handle_action_status_done_aborted(task, agent, action_state)
+                    if handled:
                         return
             elif status == 1:  # Working
-                # 对于多动作任务，即使status=1，也要检查是否已到达目标（可能动作已完成但状态未更新）
-                if task.is_multi_action and task.actions:
-                    logger.info(
-                        f"[MULTI-ACTION] Task {task.task_id} status=1 (Working), checking position for action "
-                        f"{task.current_action_index + 1}/{len(task.actions)} (action_id={task.action_id})"
-                    )
-                    is_completed = await self._check_action_completion_by_position(task, agent, task.robot_id)
-                    if is_completed:
-                        # 动作已完成（通过位置检查），切换到下一个动作
-                        completed_action_idx = task.current_action_index
-                        logger.info(
-                            f"[MULTI-ACTION] Task {task.task_id} position check indicates action {completed_action_idx + 1} completed, "
-                            f"switching to next action"
-                        )
-                        await self._handle_multi_action_completion(task, agent, task.robot_id, completed_action_idx)
-                        return  # 已处理，不需要继续
-                    else:
-                        logger.info(
-                            f"[MULTI-ACTION] Task {task.task_id} action {task.current_action_index + 1}/{len(task.actions)} "
-                            f"still in progress (status=1, position check indicates not at target)"
-                        )
-                
-                logger.debug(f"Task {task.task_id} is still working (status=1)")
+                handled = await self._handle_action_status_working(task, agent, action_state)
+                if handled:
+                    return
             elif status == 0:  # NewBorn
                 logger.debug(f"Task {task.task_id} is in NewBorn state (status=0)")
             elif status == 3:  # Paused
                 logger.debug(f"Task {task.task_id} is paused (status=3)")
-            
         except Exception as e:
-            logger.error(f"Failed to update task {task.task_id}: {e}", exc_info=True)
+            logger.error(f"Failed to process task update for task {task.task_id}: {e}", exc_info=True)
     
     async def _execute_next_action(self, task: Task, agent, robot_id: str):
         """
@@ -2613,17 +3702,40 @@ class TaskScheduler:
                         logger.info(f"Using POI name '{poi_name_to_use}' for task {task.task_id} (resolved from '{action.poi_name}')")
                     action_state = await agent.move_to_poi(
                         poi_name=poi_name_to_use,
-                        mode=0,
+                        mode=action.mode,
+                        flags=action.flags,
                         acceptable_precision=action.acceptable_precision,
-                        fail_retry_count=0
+                        fail_retry_count=action.fail_retry_count
                     )
+                    # 更新task.target_pose为POI的实际坐标（用于显示）
+                    try:
+                        pois = await asyncio.wait_for(agent.get_all_pois(), timeout=2.0)
+                        for poi in pois:
+                            if poi.id == action.poi_name or (poi.metadata and poi.metadata.get("display_name") == action.poi_name):
+                                if poi.pose:
+                                    task.target_pose = poi.pose
+                                    logger.info(
+                                        f"Updated task {task.task_id} target_pose to POI '{poi_name_to_use}' "
+                                        f"position: ({poi.pose.x:.2f}, {poi.pose.y:.2f})"
+                                    )
+                                    break
+                    except Exception as e:
+                        logger.debug(f"Failed to get POI position for task {task.task_id}: {e}")
                 elif action.target_pose:
                     # 使用坐标导航
                     action_state = await agent.move_to(
                         target=action.target_pose,
-                        mode=0,
+                        mode=action.mode,
+                        flags=action.flags,
                         acceptable_precision=action.acceptable_precision,
+                        fail_retry_count=action.fail_retry_count,
                         speed_ratio=action.speed_ratio
+                    )
+                    # 更新task.target_pose为当前动作的目标坐标
+                    task.target_pose = action.target_pose
+                    logger.info(
+                        f"Updated task {task.task_id} target_pose to action target: "
+                        f"({action.target_pose.x:.2f}, {action.target_pose.y:.2f})"
                     )
                 else:
                     raise ValueError("move_to action requires either target_pose or poi_name")
@@ -2648,33 +3760,107 @@ class TaskScheduler:
                 if task.started_at is None:
                     task.started_at = datetime.now()
                 
+                # 记录等待开始时间（用于防止其他逻辑干扰）
+                wait_start_time = datetime.now()
+                self._save_tasks_to_file()  # 立即保存状态，确保WAIT动作被记录
+                
                 # 创建一个后台任务来等待
                 async def wait_and_continue():
-                    await asyncio.sleep(action.wait_duration)
-                    # 等待完成后，继续下一个动作
-                    task.current_action_index += 1
-                    if task.current_action_index < len(task.actions):
-                        logger.info(f"Wait completed, executing next action for task {task.task_id}")
-                        await self._execute_next_action(task, agent, robot_id)
-                    else:
-                        # 所有动作完成
-                        task.status = TaskStatus.COMPLETED
-                        task.completed_at = datetime.now()
-                        logger.info(f"Task {task.task_id} (multi-action) completed all actions")
-                        self._save_tasks_to_file()
+                    try:
+                        logger.info(
+                            f"[MULTI-ACTION] Task {task.task_id} WAIT action started: "
+                            f"duration={action.wait_duration}s, action_index={task.current_action_index}"
+                        )
+                        
+                        # 等待指定时长
+                        await asyncio.sleep(action.wait_duration)
+                        
+                        # 等待完成后，检查任务状态是否仍然有效
+                        if task.task_id not in self.tasks:
+                            logger.warning(f"Task {task.task_id} was deleted during WAIT, aborting")
+                            return
+                        
+                        if task.status not in [TaskStatus.EXECUTING, TaskStatus.ASSIGNED]:
+                            logger.warning(
+                                f"Task {task.task_id} status changed to {task.status.value} during WAIT, "
+                                f"aborting continuation"
+                            )
+                            return
+                        
+                        # 验证当前动作索引仍然正确
+                        if task.current_action_index >= len(task.actions):
+                            logger.warning(
+                                f"Task {task.task_id} current_action_index ({task.current_action_index}) "
+                                f">= actions length ({len(task.actions)}), aborting"
+                            )
+                            return
+                        
+                        # 重要：检查当前动作是否仍然是WAIT动作
+                        # 如果动作索引已经改变（被其他逻辑修改），说明WAIT动作已被跳过，不应该继续
+                        current_action_item = task.actions[task.current_action_index]
+                        if current_action_item.action_type != ActionType.WAIT:
+                            logger.warning(
+                                f"Task {task.task_id} WAIT action was skipped: current_action_index={task.current_action_index}, "
+                                f"current_action_type={current_action_item.action_type}. Aborting WAIT continuation."
+                            )
+                            return
+                        
+                        # 等待完成后，继续下一个动作
+                        task.current_action_index += 1
+                        self._save_tasks_to_file()  # 保存索引更新
+                        
+                        if task.current_action_index < len(task.actions):
+                            logger.info(
+                                f"[MULTI-ACTION] Task {task.task_id} WAIT completed ({action.wait_duration}s), "
+                                f"executing next action {task.current_action_index + 1}/{len(task.actions)}"
+                            )
+                            await self._execute_next_action(task, agent, robot_id)
+                        else:
+                            # 所有动作完成
+                            task.status = TaskStatus.COMPLETED
+                            task.completed_at = datetime.now()
+                            # 释放限行区域占用
+                            await self._release_robot_from_restricted_area_on_completion(task)
+                            logger.info(f"Task {task.task_id} (multi-action) completed all actions")
+                            self._save_tasks_to_file()
+                    except Exception as e:
+                        logger.error(
+                            f"[MULTI-ACTION] Error in WAIT action continuation for task {task.task_id}: {e}",
+                            exc_info=True
+                        )
                 
                 # 启动等待任务
                 asyncio.create_task(wait_and_continue())
-                logger.info(f"Wait action started: duration={action.wait_duration}s")
+                logger.info(
+                    f"[MULTI-ACTION] Task {task.task_id} WAIT action started: "
+                    f"duration={action.wait_duration}s, action_index={task.current_action_index}"
+                )
                 
             elif action.action_type == ActionType.GO_HOME:
                 # 回桩
-                action_state = await agent.go_home()
-                task.action_id = action_state.action_id
-                task.status = TaskStatus.EXECUTING
-                if task.started_at is None:
-                    task.started_at = datetime.now()
-                logger.info(f"GoHomeAction created: action_id={action_state.action_id}")
+                try:
+                    action_state = await asyncio.wait_for(agent.go_home(), timeout=10.0)
+                    if action_state and action_state.action_id:
+                        task.action_id = action_state.action_id
+                        task.status = TaskStatus.EXECUTING
+                        if task.started_at is None:
+                            task.started_at = datetime.now()
+                        logger.info(f"GoHomeAction created: action_id={action_state.action_id}")
+                    else:
+                        logger.warning(f"GoHomeAction for task {task.task_id} returned no action_id, will check robot state")
+                        # 即使没有action_id，也标记为执行中，后续通过检查机器人状态来判断完成
+                        task.status = TaskStatus.EXECUTING
+                        if task.started_at is None:
+                            task.started_at = datetime.now()
+                except asyncio.TimeoutError:
+                    logger.warning(f"GoHomeAction for task {task.task_id} timed out after 10s, will check robot state")
+                    # 超时后也标记为执行中，后续通过检查机器人状态来判断完成
+                    task.status = TaskStatus.EXECUTING
+                    if task.started_at is None:
+                        task.started_at = datetime.now()
+                except Exception as e:
+                    logger.error(f"Failed to execute GO_HOME action for task {task.task_id}: {e}", exc_info=True)
+                    raise  # 重新抛出异常，让外层错误处理逻辑处理
             
             # 持久化到文件
             self._save_tasks_to_file()
@@ -2930,6 +4116,8 @@ class TaskScheduler:
                     task.status = TaskStatus.COMPLETED
                     task.completed_at = datetime.now()
                     task.action_id = None
+                    # 释放限行区域占用
+                    await self._release_robot_from_restricted_area_on_completion(task)
                     self._save_tasks_to_file()
                     return
                 
@@ -3025,6 +4213,8 @@ class TaskScheduler:
                         task.status = TaskStatus.COMPLETED
                         task.completed_at = datetime.now()
                         task.action_id = None
+                        # 释放限行区域占用
+                        await self._release_robot_from_restricted_area_on_completion(task)
                         logger.info(f"Task {task.task_id} all actions completed")
                     else:
                         # 执行下一个动作
@@ -3054,6 +4244,8 @@ class TaskScheduler:
                     )
                     task.status = TaskStatus.COMPLETED
                     task.completed_at = datetime.now()
+                    # 释放限行区域占用
+                    await self._release_robot_from_restricted_area_on_completion(task)
                     if task.task_id in self.task_paths:
                         del self.task_paths[task.task_id]
                     self._save_tasks_to_file()
@@ -3215,6 +4407,17 @@ class TaskScheduler:
         如果检测到阻塞，让这些机器人移动到避让点
         """
         try:
+            # 首先检查是否有执行中的任务，如果没有就直接返回，避免在没有任务时仍然检查阻塞
+            executing_tasks = [
+                t for t in self.tasks.values()
+                if t.status == TaskStatus.EXECUTING and t.robot_id and t.target_pose
+            ]
+            
+            if not executing_tasks:
+                # 没有执行中的任务，不需要检查阻塞
+                logger.debug("No executing tasks found, skipping blocking check")
+                return
+            
             # 获取所有已完成任务的机器人
             completed_tasks = [
                 t for t in self.tasks.values()
@@ -3264,8 +4467,68 @@ class TaskScheduler:
                     continue
                 if completed_robot_id in self.completed_robots_avoiding:
                     continue
+                # 检查机器人是否正在回桩（有go_home action），如果有就不应该让它避让
+                try:
+                    agent = self.robot_manager.get_robot_agent(completed_robot_id)
+                    if agent:
+                        current_action = await agent.get_current_action()
+                        if current_action and current_action.action_id:
+                            # 检查是否是回桩action（通过action_name判断）
+                            if current_action.action_name and "BackHome" in current_action.action_name:
+                                logger.debug(
+                                    f"Robot {completed_robot_id} is returning to charging dock (action_id={current_action.action_id}), "
+                                    f"skipping blocking check to avoid interrupting go_home action"
+                                )
+                                continue
+                except Exception as e:
+                    logger.debug(f"Failed to get current action for robot {completed_robot_id}: {e}")
+                
+                # 检查机器人是否已经在充电桩附近（距离原点<1米），如果是就不应该让它避让
                 state = await self.robot_manager.get_robot_state(completed_robot_id)
                 if state and state.pose:
+                    distance_to_origin = math.sqrt(state.pose.x * state.pose.x + state.pose.y * state.pose.y)
+                    if distance_to_origin < 1.0:  # 距离原点小于1米，认为在充电桩
+                        logger.debug(
+                            f"Robot {completed_robot_id} is at charging dock (distance to origin: {distance_to_origin:.2f}m), "
+                            f"skipping blocking check to avoid moving robot away from dock"
+                        )
+                        continue
+                    
+                    # 检查机器人最近完成的任务是否是GO_HOME（刚回桩完成）
+                    # 如果最近完成的任务是GO_HOME且完成时间在5分钟内，认为机器人刚回桩，不应该让它避让
+                    recent_go_home_completed = False
+                    for task in self.tasks.values():
+                        if (task.robot_id == completed_robot_id and 
+                            task.status == TaskStatus.COMPLETED and 
+                            task.completed_at):
+                            # 检查是否是最近5分钟内完成的GO_HOME任务
+                            time_since_completion = (datetime.now() - task.completed_at).total_seconds()
+                            if time_since_completion < 300:  # 5分钟内
+                                if task.is_multi_action and task.actions:
+                                    # 检查最后一个动作是否是GO_HOME
+                                    last_action = task.actions[-1] if task.actions else None
+                                    if last_action and last_action.action_type == ActionType.GO_HOME:
+                                        recent_go_home_completed = True
+                                        logger.debug(
+                                            f"Robot {completed_robot_id} recently completed GO_HOME task {task.task_id} "
+                                            f"({time_since_completion:.1f}s ago), skipping blocking check"
+                                        )
+                                        break
+                                elif not task.is_multi_action:
+                                    # 对于非多动作任务，检查任务的目标是否是充电桩（距离原点很近）
+                                    if task.target_pose:
+                                        target_distance_to_origin = math.sqrt(task.target_pose.x * task.target_pose.x + task.target_pose.y * task.target_pose.y)
+                                        if target_distance_to_origin < 1.0:
+                                            recent_go_home_completed = True
+                                            logger.debug(
+                                                f"Robot {completed_robot_id} recently completed task {task.task_id} to charging dock "
+                                                f"({time_since_completion:.1f}s ago), skipping blocking check"
+                                            )
+                                            break
+                    
+                    if recent_go_home_completed:
+                        continue
+                    
                     blocking_robots.append((completed_robot_id, state.pose, completed_task.task_id, "completed"))
             
             # 添加失败任务的机器人（同样排除正在执行任务的机器人）
@@ -3280,8 +4543,68 @@ class TaskScheduler:
                     continue
                 if failed_robot_id in self.completed_robots_avoiding:
                     continue
+                # 检查机器人是否正在回桩（有go_home action），如果有就不应该让它避让
+                try:
+                    agent = self.robot_manager.get_robot_agent(failed_robot_id)
+                    if agent:
+                        current_action = await agent.get_current_action()
+                        if current_action and current_action.action_id:
+                            # 检查是否是回桩action（通过action_name判断）
+                            if current_action.action_name and "BackHome" in current_action.action_name:
+                                logger.debug(
+                                    f"Robot {failed_robot_id} is returning to charging dock (action_id={current_action.action_id}), "
+                                    f"skipping blocking check to avoid interrupting go_home action"
+                                )
+                                continue
+                except Exception as e:
+                    logger.debug(f"Failed to get current action for robot {failed_robot_id}: {e}")
+                
+                # 检查机器人是否已经在充电桩附近（距离原点<1米），如果是就不应该让它避让
                 state = await self.robot_manager.get_robot_state(failed_robot_id)
                 if state and state.pose:
+                    distance_to_origin = math.sqrt(state.pose.x * state.pose.x + state.pose.y * state.pose.y)
+                    if distance_to_origin < 1.0:  # 距离原点小于1米，认为在充电桩
+                        logger.debug(
+                            f"Robot {failed_robot_id} is at charging dock (distance to origin: {distance_to_origin:.2f}m), "
+                            f"skipping blocking check to avoid moving robot away from dock"
+                        )
+                        continue
+                    
+                    # 检查机器人最近完成的任务是否是GO_HOME（刚回桩完成）
+                    # 如果最近完成的任务是GO_HOME且完成时间在5分钟内，认为机器人刚回桩，不应该让它避让
+                    recent_go_home_completed = False
+                    for task in self.tasks.values():
+                        if (task.robot_id == failed_robot_id and 
+                            task.status == TaskStatus.COMPLETED and 
+                            task.completed_at):
+                            # 检查是否是最近5分钟内完成的GO_HOME任务
+                            time_since_completion = (datetime.now() - task.completed_at).total_seconds()
+                            if time_since_completion < 300:  # 5分钟内
+                                if task.is_multi_action and task.actions:
+                                    # 检查最后一个动作是否是GO_HOME
+                                    last_action = task.actions[-1] if task.actions else None
+                                    if last_action and last_action.action_type == ActionType.GO_HOME:
+                                        recent_go_home_completed = True
+                                        logger.debug(
+                                            f"Robot {failed_robot_id} recently completed GO_HOME task {task.task_id} "
+                                            f"({time_since_completion:.1f}s ago), skipping blocking check"
+                                        )
+                                        break
+                                elif not task.is_multi_action:
+                                    # 对于非多动作任务，检查任务的目标是否是充电桩（距离原点很近）
+                                    if task.target_pose:
+                                        target_distance_to_origin = math.sqrt(task.target_pose.x * task.target_pose.x + task.target_pose.y * task.target_pose.y)
+                                        if target_distance_to_origin < 1.0:
+                                            recent_go_home_completed = True
+                                            logger.debug(
+                                                f"Robot {failed_robot_id} recently completed task {task.task_id} to charging dock "
+                                                f"({time_since_completion:.1f}s ago), skipping blocking check"
+                                            )
+                                            break
+                    
+                    if recent_go_home_completed:
+                        continue
+                    
                     blocking_robots.append((failed_robot_id, state.pose, failed_task.task_id, "failed"))
             
             # 添加IDLE状态的机器人（同样排除正在执行任务的机器人）
@@ -3292,22 +4615,70 @@ class TaskScheduler:
                         f"Robot {robot_id} is idle but has an executing task, skipping blocking check"
                     )
                     continue
+                # 检查机器人是否正在回桩（有go_home action），如果有就不应该让它避让
+                try:
+                    agent = self.robot_manager.get_robot_agent(robot_id)
+                    if agent:
+                        current_action = await agent.get_current_action()
+                        if current_action and current_action.action_id:
+                            # 检查是否是回桩action（通过action_name判断）
+                            if current_action.action_name and "BackHome" in current_action.action_name:
+                                logger.debug(
+                                    f"Robot {robot_id} is returning to charging dock (action_id={current_action.action_id}), "
+                                    f"skipping blocking check to avoid interrupting go_home action"
+                                )
+                                continue
+                except Exception as e:
+                    logger.debug(f"Failed to get current action for robot {robot_id}: {e}")
+                
+                # 检查机器人是否已经在充电桩附近（距离原点<1米），如果是就不应该让它避让
+                # 充电桩通常在原点(0,0)附近
+                distance_to_origin = math.sqrt(pose.x * pose.x + pose.y * pose.y)
+                if distance_to_origin < 1.0:  # 距离原点小于1米，认为在充电桩
+                    logger.debug(
+                        f"Robot {robot_id} is at charging dock (distance to origin: {distance_to_origin:.2f}m), "
+                        f"skipping blocking check to avoid moving robot away from dock"
+                    )
+                    continue
+                
+                # 检查机器人最近完成的任务是否是GO_HOME（刚回桩完成）
+                # 如果最近完成的任务是GO_HOME且完成时间在5分钟内，认为机器人刚回桩，不应该让它避让
+                recent_go_home_completed = False
+                for task in self.tasks.values():
+                    if (task.robot_id == robot_id and 
+                        task.status == TaskStatus.COMPLETED and 
+                        task.completed_at):
+                        # 检查是否是最近5分钟内完成的GO_HOME任务
+                        time_since_completion = (datetime.now() - task.completed_at).total_seconds()
+                        if time_since_completion < 300:  # 5分钟内
+                            if task.is_multi_action and task.actions:
+                                # 检查最后一个动作是否是GO_HOME
+                                last_action = task.actions[-1] if task.actions else None
+                                if last_action and last_action.action_type == ActionType.GO_HOME:
+                                    recent_go_home_completed = True
+                                    logger.debug(
+                                        f"Robot {robot_id} recently completed GO_HOME task {task.task_id} "
+                                        f"({time_since_completion:.1f}s ago), skipping blocking check"
+                                    )
+                                    break
+                            elif not task.is_multi_action and task.action_type == ActionType.GO_HOME:
+                                recent_go_home_completed = True
+                                logger.debug(
+                                    f"Robot {robot_id} recently completed GO_HOME task {task.task_id} "
+                                    f"({time_since_completion:.1f}s ago), skipping blocking check"
+                                )
+                                break
+                
+                if recent_go_home_completed:
+                    continue
+                
                 if robot_id not in self.completed_robots_avoiding:
                     blocking_robots.append((robot_id, pose, None, "idle"))
             
             if not blocking_robots:
                 return
             
-            # 获取所有执行中的任务（不要求路径必须存在，因为可能路径规划失败或路径未保存）
-            executing_tasks = [
-                t for t in self.tasks.values()
-                if t.status == TaskStatus.EXECUTING and t.robot_id and t.target_pose
-            ]
-            
-            if not executing_tasks:
-                logger.debug("No executing tasks found for blocking check")
-                return
-            
+            # 执行中的任务已经在方法开始处检查过了，这里直接使用
             logger.debug(
                 f"Checking blocking: {len(blocking_robots)} potential blocking robots, "
                 f"{len(executing_tasks)} executing tasks"
@@ -3315,6 +4686,20 @@ class TaskScheduler:
             
             # 对每个可能阻塞的机器人，检查是否阻塞了执行中任务的路径
             for robot_id, robot_pose, task_id, task_status in blocking_robots:
+                # 首先检查机器人是否已经有正在执行的action，如果有就不应该认为它阻塞
+                try:
+                    agent = self.robot_manager.get_robot_agent(robot_id)
+                    if agent:
+                        current_action = await agent.get_current_action()
+                        if current_action and current_action.action_id:
+                            logger.debug(
+                                f"Robot {robot_id} has active action (action_id={current_action.action_id}), "
+                                f"skipping blocking check to avoid false positives"
+                            )
+                            continue
+                except Exception as e:
+                    logger.debug(f"Failed to get current action for robot {robot_id}: {e}")
+                
                 # 检查是否阻塞了任何执行中任务的路径或目标点
                 blocking_executing_tasks = []
                 robot_radius = 0.3  # 机器人半径
@@ -3322,6 +4707,14 @@ class TaskScheduler:
                 threshold_distance = robot_radius * 2 + safety_distance  # 1.4米
                 
                 for executing_task in executing_tasks:
+                    # 重要：排除机器人阻塞自己任务的情况
+                    if robot_id == executing_task.robot_id:
+                        logger.debug(
+                            f"Robot {robot_id} is executing task {executing_task.task_id}, "
+                            f"skipping self-blocking check"
+                        )
+                        continue
+                    
                     # 获取执行中任务的机器人当前位置（用于计算到阻塞机器人的距离）
                     executing_robot_state = await self.robot_manager.get_robot_state(executing_task.robot_id)
                     if not executing_robot_state or not executing_robot_state.pose:
@@ -3334,14 +4727,20 @@ class TaskScheduler:
                     blocking_reason = None
                     
                     # 1. 检查是否阻塞了执行中机器人的当前位置（如果执行中机器人被卡住）
-                    dx = robot_pose.x - executing_robot_state.pose.x
-                    dy = robot_pose.y - executing_robot_state.pose.y
-                    current_distance = math.sqrt(dx*dx + dy*dy)
-                    if current_distance < threshold_distance:
-                        min_distance = current_distance
-                        blocking_reason = "blocking executing robot's current position"
+                    # 只检查如果执行中机器人距离目标点较远（>2米），说明可能被阻塞
+                    if target_pose:
+                        dx_to_target = executing_robot_state.pose.x - target_pose.x
+                        dy_to_target = executing_robot_state.pose.y - target_pose.y
+                        distance_to_target = math.sqrt(dx_to_target*dx_to_target + dy_to_target*dy_to_target)
+                        if distance_to_target > 2.0:  # 执行中机器人距离目标点较远，可能被阻塞
+                            dx = robot_pose.x - executing_robot_state.pose.x
+                            dy = robot_pose.y - executing_robot_state.pose.y
+                            current_distance = math.sqrt(dx*dx + dy*dy)
+                            if current_distance < threshold_distance:
+                                min_distance = current_distance
+                                blocking_reason = "blocking executing robot's current position"
                     
-                    # 2. 检查是否阻塞了路径（如果有路径）
+                    # 2. 检查是否阻塞了路径（如果有路径）- 这是最重要的检查
                     if executing_path and len(executing_path) > 0:
                         for path_point in executing_path:
                             dx = robot_pose.x - path_point.x
@@ -3351,12 +4750,21 @@ class TaskScheduler:
                                 min_distance = distance
                                 blocking_reason = "blocking path"
                     
-                    # 3. 检查是否阻塞了目标点（必须检查）
+                    # 3. 检查是否阻塞了目标点（只检查如果执行中机器人距离目标点很近，<1米）
+                    # 这样可以避免对距离目标点很远的任务误判
                     if target_pose:
-                        dx = robot_pose.x - target_pose.x
-                        dy = robot_pose.y - target_pose.y
-                        target_distance = math.sqrt(dx*dx + dy*dy)
-                        if target_distance < min_distance:
+                        dx_to_target = robot_pose.x - target_pose.x
+                        dy_to_target = robot_pose.y - target_pose.y
+                        target_distance = math.sqrt(dx_to_target*dx_to_target + dy_to_target*dy_to_target)
+                        
+                        # 获取执行中机器人到目标点的距离
+                        dx_executing_to_target = executing_robot_state.pose.x - target_pose.x
+                        dy_executing_to_target = executing_robot_state.pose.y - target_pose.y
+                        executing_to_target_distance = math.sqrt(dx_executing_to_target*dx_executing_to_target + dy_executing_to_target*dy_executing_to_target)
+                        
+                        # 只有当执行中机器人距离目标点很近（<1米）时，才检查阻塞机器人是否阻塞目标点
+                        # 这样可以避免对距离目标点很远的任务误判
+                        if executing_to_target_distance < 1.0 and target_distance < min_distance:
                             min_distance = target_distance
                             blocking_reason = "blocking target point"
                     
@@ -3407,6 +4815,72 @@ class TaskScheduler:
             blocking_tasks: 被阻塞的任务列表
         """
         try:
+            # 首先检查机器人是否已经在充电桩附近（距离原点<1米），如果是就不应该发送避让指令
+            distance_to_origin = math.sqrt(current_pose.x * current_pose.x + current_pose.y * current_pose.y)
+            if distance_to_origin < 1.0:  # 距离原点小于1米，认为在充电桩
+                logger.info(
+                    f"Robot {robot_id} is at charging dock (distance to origin: {distance_to_origin:.2f}m), "
+                    f"skipping avoidance to avoid moving robot away from dock"
+                )
+                # 从避让列表中移除
+                self.completed_robots_avoiding.discard(robot_id)
+                return
+            
+            # 检查机器人状态是否为idle且没有current_action（已经在充电桩）
+            try:
+                robot_state = await self.robot_manager.get_robot_state(robot_id)
+                if robot_state and robot_state.status.value == "idle":
+                    agent = self.robot_manager.get_robot_agent(robot_id)
+                    if agent:
+                        current_action = await agent.get_current_action()
+                        if not current_action or not current_action.action_id:
+                            logger.info(
+                                f"Robot {robot_id} is idle at charging dock (no current action), "
+                                f"skipping avoidance to avoid moving robot away from dock"
+                            )
+                            # 从避让列表中移除
+                            self.completed_robots_avoiding.discard(robot_id)
+                            return
+            except Exception as e:
+                logger.debug(f"Failed to check robot state for robot {robot_id}: {e}")
+            
+            # 检查机器人最近完成的任务是否是GO_HOME（刚回桩完成）
+            # 如果最近完成的任务是GO_HOME且完成时间在5分钟内，认为机器人刚回桩，不应该让它避让
+            recent_go_home_completed = False
+            for task in self.tasks.values():
+                if (task.robot_id == robot_id and 
+                    task.status == TaskStatus.COMPLETED and 
+                    task.completed_at):
+                    # 检查是否是最近5分钟内完成的GO_HOME任务
+                    time_since_completion = (datetime.now() - task.completed_at).total_seconds()
+                    if time_since_completion < 300:  # 5分钟内
+                        if task.is_multi_action and task.actions:
+                            # 检查最后一个动作是否是GO_HOME
+                            last_action = task.actions[-1] if task.actions else None
+                            if last_action and last_action.action_type == ActionType.GO_HOME:
+                                recent_go_home_completed = True
+                                logger.info(
+                                    f"Robot {robot_id} recently completed GO_HOME task {task.task_id} "
+                                    f"({time_since_completion:.1f}s ago), skipping avoidance"
+                                )
+                                break
+                        elif not task.is_multi_action:
+                            # 对于非多动作任务，检查任务的目标是否是充电桩（距离原点很近）
+                            if task.target_pose:
+                                target_distance_to_origin = math.sqrt(task.target_pose.x * task.target_pose.x + task.target_pose.y * task.target_pose.y)
+                                if target_distance_to_origin < 1.0:
+                                    recent_go_home_completed = True
+                                    logger.info(
+                                        f"Robot {robot_id} recently completed task {task.task_id} to charging dock "
+                                        f"({time_since_completion:.1f}s ago), skipping avoidance"
+                                    )
+                                    break
+            
+            if recent_go_home_completed:
+                # 从避让列表中移除
+                self.completed_robots_avoiding.discard(robot_id)
+                return
+            
             agent = self.robot_manager.get_robot_agent(robot_id)
             if not agent:
                 return
@@ -3477,6 +4951,62 @@ class TaskScheduler:
                     break
             
             if backoff_pose:
+                # 再次检查机器人是否已经在充电桩附近（距离原点<1米），如果是就不应该发送避让指令
+                # 这个检查在计算避让点之后，发送move_to之前，确保即使避让点计算成功，也不会移动回桩的机器人
+                try:
+                    robot_state = await self.robot_manager.get_robot_state(robot_id)
+                    if robot_state and robot_state.pose:
+                        distance_to_origin = math.sqrt(robot_state.pose.x * robot_state.pose.x + robot_state.pose.y * robot_state.pose.y)
+                        if distance_to_origin < 1.0:  # 距离原点小于1米，认为在充电桩
+                            logger.info(
+                                f"Robot {robot_id} is at charging dock (distance to origin: {distance_to_origin:.2f}m), "
+                                f"skipping avoidance move_to to avoid moving robot away from dock"
+                            )
+                            # 从避让列表中移除
+                            self.completed_robots_avoiding.discard(robot_id)
+                            return
+                        
+                        # 检查机器人状态是否为idle且没有current_action（已经在充电桩）
+                        if robot_state.status.value == "idle":
+                            try:
+                                current_action = await agent.get_current_action()
+                                if not current_action or not current_action.action_id:
+                                    logger.info(
+                                        f"Robot {robot_id} is idle at charging dock (no current action), "
+                                        f"skipping avoidance move_to to avoid moving robot away from dock"
+                                    )
+                                    # 从避让列表中移除
+                                    self.completed_robots_avoiding.discard(robot_id)
+                                    return
+                            except Exception as e:
+                                logger.debug(f"Failed to get current action for robot {robot_id}: {e}")
+                except Exception as e:
+                    logger.debug(f"Failed to check robot state for robot {robot_id}: {e}")
+                
+                # 检查机器人是否已经有正在执行的action，如果有就不发送新的move_to指令
+                try:
+                    current_action = await agent.get_current_action()
+                    if current_action and current_action.action_id:
+                        # 检查是否是回桩action（通过action_name判断）
+                        if current_action.action_name and "BackHome" in current_action.action_name:
+                            logger.info(
+                                f"Robot {robot_id} is returning to charging dock (action_id={current_action.action_id}), "
+                                f"skipping avoidance move_to to avoid interrupting go_home action"
+                            )
+                            # 从避让列表中移除，避免重复处理
+                            self.completed_robots_avoiding.discard(robot_id)
+                            return
+                        else:
+                            logger.info(
+                                f"Robot {robot_id} already has an active action (action_id={current_action.action_id}), "
+                                f"skipping avoidance move_to to avoid duplicate commands"
+                            )
+                            # 从避让列表中移除，避免重复处理
+                            self.completed_robots_avoiding.discard(robot_id)
+                            return
+                except Exception as e:
+                    logger.debug(f"Failed to get current action for robot {robot_id}: {e}")
+                
                 logger.info(
                     f"Moving completed task robot {robot_id} to avoidance point "
                     f"({backoff_pose.x:.2f}, {backoff_pose.y:.2f})"

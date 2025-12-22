@@ -12,6 +12,7 @@ from app.models.task import Task, TaskCreate, TaskStatus, MultiActionTaskCreate,
 from app.services.task_scheduler import TaskScheduler, get_task_scheduler
 from app.services.map_manager import MapManager, get_map_manager
 from app.services.robot_manager import RobotManager, get_robot_manager
+from app.services.restricted_area_traffic_manager import RestrictedAreaTrafficManager
 # 认证已移除，所有API端点无需授权即可调用
 
 router = APIRouter()
@@ -149,7 +150,31 @@ async def list_tasks(
         # 优化：不在API请求时同步更新任务状态，避免阻塞响应
         # 任务状态更新在后台循环中自动进行，这里直接获取当前状态即可
         # await task_scheduler._update_executing_tasks()  # 注释掉，避免阻塞
-        tasks = await task_scheduler.list_tasks(status, robot_id)
+        
+        # 优化：使用数据库层面的分页，避免加载所有任务
+        # 先获取总数（用于分页信息），然后只加载当前页的任务
+        import asyncio
+        import math
+        
+        # 计算分页参数
+        limit = page_size
+        offset = (page - 1) * page_size
+        
+        # 添加超时保护，确保即使数据库查询很慢也能快速返回
+        try:
+            # 并发获取总数和当前页任务（提高响应速度）
+            # 增加超时时间到8秒，给数据库查询和转换留出足够时间
+            total_count, tasks = await asyncio.wait_for(
+                asyncio.gather(
+                    task_scheduler.count_tasks(status, robot_id),
+                    task_scheduler.list_tasks(status, robot_id, limit=limit, offset=offset)
+                ),
+                timeout=8.0  # 8秒超时，给数据库查询和任务转换留出足够时间
+            )
+        except asyncio.TimeoutError:
+            logger.error("Task list query timeout, returning empty list")
+            tasks = []
+            total_count = 0
         
         # 优化：POI查询改为可选，如果超时则跳过（不影响任务列表显示）
         async def get_all_pois_data():
@@ -298,27 +323,112 @@ async def list_tasks(
                 logger.warning(f"Invalid date format: start_date={start_date}, end_date={end_date}, error: {e}")
         
         # 将Task对象转换为字典，并添加target_poi_name字段
-        # 优化：限制处理的任务数量，避免处理过多任务导致超时
-        max_tasks_to_process = 1000  # 最多处理1000个任务
-        tasks_to_process = tasks[:max_tasks_to_process] if len(tasks) > max_tasks_to_process else tasks
+        # 注意：由于使用了数据库层面的分页，tasks已经是当前页的数据（最多20条）
+        # 不需要再限制处理数量，直接处理即可
         
-        if len(tasks) > max_tasks_to_process:
-            logger.warning(f"Too many tasks ({len(tasks)}), only processing first {max_tasks_to_process} for performance")
+        import time
+        dict_start = time.time()
+        
+        # 预先收集所有需要获取充电桩坐标的GO_HOME任务，并发获取
+        go_home_tasks = {}
+        for task in tasks:
+            if task.is_multi_action and task.actions:
+                last_action = task.actions[-1] if task.actions else None
+                if last_action:
+                    last_action_type = last_action.action_type if hasattr(last_action, 'action_type') else last_action.get('action_type')
+                    if last_action_type == "go_home" and task.robot_id:
+                        go_home_tasks[task.task_id] = task.robot_id
+        
+        # 并发获取所有充电桩坐标（带超时控制）
+        dock_poses = {}
+        if go_home_tasks:
+            async def get_dock_pose(robot_id, task_id):
+                try:
+                    agent = robot_manager.get_robot_agent(robot_id)
+                    if agent:
+                        return task_id, await asyncio.wait_for(
+                            agent.get_home_dock_pose(),
+                            timeout=1.5  # 1.5秒超时，避免累积超时
+                        )
+                except asyncio.TimeoutError:
+                    logger.debug(f"Timeout getting home dock pose for robot {robot_id} (task {task_id})")
+                except Exception as e:
+                    logger.debug(f"Failed to get home dock pose for robot {robot_id} (task {task_id}): {e}")
+                return task_id, None
+            
+            # 并发获取所有充电桩坐标
+            dock_results = await asyncio.gather(*[
+                get_dock_pose(robot_id, task_id) 
+                for task_id, robot_id in go_home_tasks.items()
+            ], return_exceptions=True)
+            
+            for result in dock_results:
+                if isinstance(result, tuple) and len(result) == 2:
+                    task_id, dock_pose = result
+                    if dock_pose:
+                        dock_poses[task_id] = dock_pose
         
         result = []
-        for task in tasks_to_process:
+        for task in tasks:
             # 对于多动作任务，检查动作序列中是否有使用POI的动作
             target_poi_name = None
+            # 初始化 last_move_action，确保在所有代码路径中都有定义
+            last_move_action = None
+            
             if task.is_multi_action and task.actions:
-                # 查找最后一个使用POI的移动动作（用于显示目标位置）
-                last_move_action = None
-                for action in reversed(task.actions):
-                    # action可能是ActionItem对象或字典
-                    action_type = action.action_type if hasattr(action, 'action_type') else action.get('action_type')
-                    if action_type == "move_to":
-                        last_move_action = action
-                        break
+                # 检查最后一个动作是否是GO_HOME
+                last_action = task.actions[-1] if task.actions else None
+                last_action_type = None
+                if last_action:
+                    last_action_type = last_action.action_type if hasattr(last_action, 'action_type') else last_action.get('action_type')
                 
+                # 如果最后一个动作是GO_HOME，使用预先获取的充电桩坐标
+                if last_action_type == "go_home":
+                    # GO_HOME动作的目标是充电桩，使用预先获取的充电桩坐标
+                    dock_pose = dock_poses.get(task.task_id)
+                    
+                    # 如果获取到充电桩坐标，使用实际坐标；否则使用默认值(0,0,0)
+                    if dock_pose:
+                        if task.target_pose:
+                            task.target_pose.x = dock_pose.x
+                            task.target_pose.y = dock_pose.y
+                            task.target_pose.yaw = dock_pose.yaw
+                        else:
+                            from app.models.robot import Pose
+                            task.target_pose = Pose(x=dock_pose.x, y=dock_pose.y, yaw=dock_pose.yaw)
+                        logger.debug(
+                            f"Task {task.task_id} GO_HOME: using actual dock pose "
+                            f"({dock_pose.x:.2f}, {dock_pose.y:.2f}, {dock_pose.yaw:.2f}) for robot {task.robot_id}"
+                        )
+                    else:
+                        # 如果无法获取充电桩坐标，使用默认值(0,0,0)
+                        if task.target_pose:
+                            task.target_pose.x = 0.0
+                            task.target_pose.y = 0.0
+                            task.target_pose.yaw = 0.0
+                        else:
+                            from app.models.robot import Pose
+                            task.target_pose = Pose(x=0.0, y=0.0, yaw=0.0)
+                        logger.debug(
+                            f"Task {task.task_id} GO_HOME: using default dock pose (0,0,0) "
+                            f"(robot {task.robot_id} dock pose not available)"
+                        )
+                    target_poi_name = "充电桩"  # 标记为充电桩
+                    # 对于GO_HOME动作，last_move_action保持为None
+                    last_move_action = None
+                else:
+                    # 查找最后一个MOVE_TO动作（排除GO_HOME，用于显示目标位置）
+                    # 确保在循环前last_move_action已初始化为None
+                    last_move_action = None
+                    for action in reversed(task.actions):
+                        # action可能是ActionItem对象或字典
+                        action_type = action.action_type if hasattr(action, 'action_type') else action.get('action_type')
+                        # 只查找MOVE_TO动作，排除GO_HOME（因为GO_HOME不是目标点）
+                        if action_type == "move_to":
+                            last_move_action = action
+                            break
+                
+                # 处理 last_move_action（无论是否找到）
                 if last_move_action:
                     # 检查是否有poi_name
                     poi_name = None
@@ -344,36 +454,15 @@ async def list_tasks(
                         else:
                             # 如果机器人离线且没有保存的显示名称，至少显示POI ID
                             target_poi_name = poi_name
-                        
-                        # 如果target_pose是(0,0,0)，尝试从POI获取实际坐标
-                        if task.target_pose and (task.target_pose.x == 0.0 and task.target_pose.y == 0.0):
-                            # 尝试从POI数据中获取实际坐标
-                            try:
-                                if task.robot_id:
-                                    agent = robot_manager.get_robot_agent(task.robot_id)
-                                    if agent:
-                                        pois = await asyncio.wait_for(agent.get_all_pois(), timeout=1.0)
-                                        for poi in pois:
-                                            if poi.id == poi_name or (poi.metadata and poi.metadata.get("display_name") == poi_name):
-                                                if poi.pose:
-                                                    # 更新target_pose为POI的实际坐标
-                                                    task.target_pose = poi.pose
-                                                    logger.debug(
-                                                        f"Updated task {task.task_id} target_pose from POI {poi_name}: "
-                                                        f"({poi.pose.x}, {poi.pose.y})"
-                                                    )
-                                                    break
-                            except Exception as e:
-                                logger.debug(f"Failed to get POI coordinates for task {task.task_id}: {e}")
-                    
-                    # 如果动作有target_pose，使用它
-                    elif hasattr(last_move_action, 'target_pose') and last_move_action.target_pose:
-                        task.target_pose = last_move_action.target_pose
-                    elif isinstance(last_move_action, dict) and last_move_action.get('target_pose'):
-                        from app.models.robot import Pose
-                        pose_data = last_move_action.get('target_pose')
-                        if isinstance(pose_data, dict):
-                            task.target_pose = Pose(**pose_data)
+                    else:
+                        # 如果动作没有poi_name，但有target_pose，使用它
+                        if hasattr(last_move_action, 'target_pose') and last_move_action.target_pose:
+                            task.target_pose = last_move_action.target_pose
+                        elif isinstance(last_move_action, dict) and last_move_action.get('target_pose'):
+                            from app.models.robot import Pose
+                            pose_data = last_move_action.get('target_pose')
+                            if isinstance(pose_data, dict):
+                                task.target_pose = Pose(**pose_data)
                 
                 # 如果没有找到POI，尝试通过坐标查找（只有当target_pose不是默认值时）
                 if not target_poi_name and task.target_pose:
@@ -397,8 +486,21 @@ async def list_tasks(
         else:  # desc
             result.sort(key=lambda t: t.get("created_at", "") or "", reverse=True)
         
-        # 计算统计信息（在筛选和排序之后）
-        total = len(result)
+        # 注意：由于使用了数据库层面的分页，result已经是当前页的数据
+        # 但如果有时间筛选，需要重新计算总数和分页
+        # 为了性能，统计信息只基于当前页（如果需要完整统计，需要额外查询）
+        
+        # 如果有时间筛选，需要重新计算总数（简化处理：使用当前页数据估算）
+        # 实际总数应该基于数据库查询，但为了性能暂时使用当前页数据
+        if start_date or end_date:
+            # 有时间筛选时，总数需要重新计算（这里简化处理）
+            # 实际应该从数据库查询，但为了性能暂时使用当前页数据
+            total = len(result)
+        else:
+            # 没有时间筛选时，使用数据库查询的总数
+            total = total_count
+        
+        # 计算统计信息（基于当前页数据，如果需要完整统计需要额外查询）
         stats = {
             "total": total,
             "pending": sum(1 for t in result if t.get("status") == "pending"),
@@ -409,11 +511,17 @@ async def list_tasks(
             "cancelled": sum(1 for t in result if t.get("status") == "cancelled")
         }
         
-        # 分页处理
-        total_pages = math.ceil(total / page_size) if total > 0 else 1
-        start_idx = (page - 1) * page_size
-        end_idx = start_idx + page_size
-        paginated_tasks = result[start_idx:end_idx]
+        # 分页处理（result已经是当前页的数据，但如果有时间筛选需要重新分页）
+        if start_date or end_date:
+            # 有时间筛选时，需要重新分页
+            total_pages = math.ceil(total / page_size) if total > 0 else 1
+            start_idx = (page - 1) * page_size
+            end_idx = start_idx + page_size
+            paginated_tasks = result[start_idx:end_idx]
+        else:
+            # 没有时间筛选时，result已经是分页后的数据
+            total_pages = math.ceil(total / page_size) if total > 0 else 1
+            paginated_tasks = result
         
         return {
             "tasks": paginated_tasks,
@@ -471,7 +579,10 @@ async def create_multi_action_task(
                         "roll": 0.0
                     },
                     "acceptable_precision": 0.3,
-                    "speed_ratio": 1.0
+                    "speed_ratio": 1.0,
+                    "mode": 0,
+                    "flags": ["precise", "with_yaw"],
+                    "fail_retry_count": 0
                 },
                 {
                     "action_type": "wait",
@@ -499,6 +610,12 @@ async def create_multi_action_task(
     - **move_to**: 移动到目标点
       - 方式1（推荐）：使用 `target_pose` 指定坐标，简单可靠
       - 方式2：使用 `poi_name` 指定POI名称（需要先查询POI：GET /api/maps/pois）
+      - **move_options 配置参数**（可选）：
+        - `mode`: 导航模式（0:Free navigation, 1:Strict Track, 2:Track priority），默认 0
+        - `flags`: 标志列表（如：`["precise", "with_yaw"]`），默认 `[]`
+        - `fail_retry_count`: 失败重试次数，默认 0
+        - `acceptable_precision`: 到达精度（米），默认 0.3
+        - `speed_ratio`: 速度比例，默认 1.0
     - **wait**: 等待指定时间（需要 `wait_duration` > 0，单位：秒）
     - **go_home**: 回桩（不需要额外参数）
     
@@ -651,4 +768,207 @@ async def reset_task(
     except Exception as e:
         logger.error(f"Failed to reset task {task_id}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/force-unlock-restricted-area", response_model=dict, summary="强制解锁限行区域中的机器人")
+async def force_unlock_restricted_area(
+    task_scheduler: TaskScheduler = Depends(get_task_scheduler)
+):
+    """
+    强制解锁限行区域中卡住的机器人
+    
+    这个API会：
+    1. 强制检查并解锁所有限行区域的阻塞
+    2. 清除所有等待状态，让机器人继续执行任务
+    3. 触发容量检查，让等待的机器人可以通行
+    
+    用于解决机器人死锁在限行区域的问题。
+    
+    Returns:
+        dict: 解锁结果，包含解锁的机器人数量和状态
+    """
+    try:
+        logger.info("[API] Force unlock restricted area requested")
+        
+        restricted_area_manager = task_scheduler.restricted_area_traffic_manager
+        
+        # 强制检查并解锁所有限行区域的阻塞（使用force_unlock=True立即解锁）
+        await restricted_area_manager._check_and_resolve_capacity_overflow(force_unlock=True)
+        await restricted_area_manager._check_direct_blocking_in_restricted_area(force_unlock=True)
+        await restricted_area_manager._check_stuck_robots_in_restricted_area(force_unlock=True)
+        
+        # 强制清除所有等待状态，让机器人继续执行任务
+        waiting_robots = list(restricted_area_manager.robot_waiting_status.keys())
+        cleared_waiting = len(waiting_robots)
+        if waiting_robots:
+            logger.warning(
+                f"[API] Found {cleared_waiting} robots in waiting status: {waiting_robots}. "
+                f"Clearing waiting status to allow task continuation..."
+            )
+            for robot_id in waiting_robots:
+                if robot_id in restricted_area_manager.robot_waiting_status:
+                    del restricted_area_manager.robot_waiting_status[robot_id]
+        
+        # 强制触发容量检查，让等待的机器人可以通行
+        await restricted_area_manager.check_waiting_robots()
+        
+        # 验证并清理不在限行区域内的机器人
+        # 重要：先检查所有机器人的实际位置，然后统一释放
+        robots_to_release = []
+        restricted_areas = restricted_area_manager.map_manager.restricted_areas
+        
+        logger.info(f"[API] Starting validation: {len(restricted_area_manager.area_traffic)} areas in traffic")
+        # 遍历所有限行区域的通行列表
+        for area_id, traffic in list(restricted_area_manager.area_traffic.items()):
+            logger.info(f"[API] Area {area_id}: {len(traffic['robots'])} robots in traffic list: {traffic['robots']}")
+            if not traffic.get('robots'):
+                logger.info(f"[API] Area {area_id} has no robots in traffic list, skipping")
+                continue
+            for robot_id in list(traffic['robots']):
+                try:
+                    robot_state = await task_scheduler.robot_manager.get_robot_state(robot_id, force_update=True)
+                    if robot_state and robot_state.pose:
+                        # 检查机器人是否真的在限行区域内
+                        is_in_area = False
+                        area_found = False
+                        for area in restricted_areas:
+                            if area.get("id") == area_id:
+                                area_found = True
+                                area_data = area.get("area", {})
+                                if area_data:
+                                    start = area_data.get("start", {})
+                                    end = area_data.get("end", {})
+                                    half_width = area_data.get("half_width", 0.5)
+                                    if start and end:
+                                        is_in_area = restricted_area_manager.is_point_in_restricted_area(
+                                            robot_state.pose, start, end, half_width
+                                        )
+                                        if is_in_area:
+                                            logger.info(
+                                                f"[API] Robot {robot_id} is confirmed in area {area_id} "
+                                                f"(pose: {robot_state.pose.x:.2f}, {robot_state.pose.y:.2f})"
+                                            )
+                                        else:
+                                            logger.warning(
+                                                f"[API] Robot {robot_id} is NOT in area {area_id} "
+                                                f"(pose: {robot_state.pose.x:.2f}, {robot_state.pose.y:.2f}, "
+                                                f"area_start=({start.get('x', 0):.2f}, {start.get('y', 0):.2f}), "
+                                                f"area_end=({end.get('x', 0):.2f}, {end.get('y', 0):.2f}), "
+                                                f"half_width={half_width})"
+                                            )
+                                        break
+                                else:
+                                    logger.warning(f"[API] Area {area_id} has no area_data")
+                        if not area_found:
+                            logger.warning(f"[API] Area {area_id} not found in restricted_areas, will release robot {robot_id}")
+                            robots_to_release.append((robot_id, area_id))
+                        elif not is_in_area:
+                            # 机器人不在限行区域内，应该释放
+                            robots_to_release.append((robot_id, area_id))
+                            logger.warning(
+                                f"[API] Robot {robot_id} is in traffic list for area {area_id} "
+                                f"but NOT actually in the area (pose: {robot_state.pose.x:.2f}, {robot_state.pose.y:.2f}). "
+                                f"Will release from area."
+                            )
+                    else:
+                        # 无法获取机器人状态，也释放（可能是机器人离线或状态异常）
+                        logger.warning(
+                            f"[API] Cannot get robot state for {robot_id}, will release from area {area_id}"
+                        )
+                        robots_to_release.append((robot_id, area_id))
+                except Exception as e:
+                    logger.error(f"[API] Failed to check robot {robot_id} position: {e}, will release from area {area_id}", exc_info=True)
+                    robots_to_release.append((robot_id, area_id))
+        
+        # 释放不在限行区域内的机器人
+        logger.info(f"[API] Found {len(robots_to_release)} robots to release: {robots_to_release}")
+        for robot_id, area_id in robots_to_release:
+            try:
+                logger.info(f"[API] Releasing robot {robot_id} from area {area_id}...")
+                await restricted_area_manager.release_robot_from_area(robot_id, area_id)
+                logger.info(f"[API] Successfully released robot {robot_id} from area {area_id}")
+            except Exception as e:
+                logger.error(f"[API] Failed to release robot {robot_id} from area {area_id}: {e}", exc_info=True)
+        
+        # 检查P3的状态（用于调试）
+        p3_in_traffic = any('P3' in traffic['robots'] for traffic in restricted_area_manager.area_traffic.values())
+        p3_in_waiting = 'P3' in restricted_area_manager.robot_waiting_status
+        logger.info(
+            f"[API] P3 status: in_traffic_list={p3_in_traffic}, "
+            f"in_waiting_status={p3_in_waiting}, "
+            f"waiting_status={restricted_area_manager.robot_waiting_status.get('P3') if p3_in_waiting else None}"
+        )
+        
+        # 如果P3在等待状态中但不在通行列表中，尝试将其移到通行列表
+        if p3_in_waiting and not p3_in_traffic:
+            waiting_info = restricted_area_manager.robot_waiting_status.get('P3')
+            if waiting_info:
+                area_id = waiting_info.get('area_id')
+                task_id = waiting_info.get('original_task_id')
+                logger.warning(
+                    f"[API] P3 is in waiting status for area {area_id} but not in traffic list. "
+                    f"Task: {task_id}. Will try to add to traffic list."
+                )
+                # 检查限行区域是否有空位
+                if area_id in restricted_area_manager.area_traffic:
+                    traffic = restricted_area_manager.area_traffic[area_id]
+                    capacity = traffic.get('capacity', 1)
+                    if len(traffic['robots']) < capacity:
+                        # 有空位，将P3移到通行列表
+                        traffic['robots'].append('P3')
+                        restricted_area_manager.robot_enter_time['P3'] = {
+                            'area_id': area_id,
+                            'enter_time': datetime.now()
+                        }
+                        logger.info(
+                            f"[API] Added P3 to traffic list for area {area_id} "
+                            f"(capacity: {capacity}, current: {len(traffic['robots'])})"
+                        )
+        
+        # 强制触发任务恢复，确保在通行列表中的机器人恢复任务
+        await task_scheduler._check_and_resume_waiting_robots()
+        
+        # 强制检查POI等待点（确保POI已加载）
+        if not restricted_area_manager.poi_waiting_points:
+            await restricted_area_manager.load_poi_waiting_points()
+        
+        # 检查P3的任务状态（用于调试）
+        p3_tasks = [task for task in task_scheduler.tasks.values() if task.robot_id == "P3"]
+        p3_task_info = []
+        for task in p3_tasks:
+            p3_task_info.append({
+                "task_id": task.task_id,
+                "status": task.status.value,
+                "action_id": task.action_id,
+                "current_action_index": task.current_action_index if hasattr(task, 'current_action_index') else None,
+                "is_multi_action": task.is_multi_action if hasattr(task, 'is_multi_action') else False
+            })
+            logger.info(
+                f"[API] P3 task {task.task_id}: status={task.status.value}, "
+                f"action_id={task.action_id}, in_traffic_list={any('P3' in traffic['robots'] for traffic in restricted_area_manager.area_traffic.values())}"
+            )
+        
+        # 统计限行区域中的机器人数量（在清理后）
+        robots_in_areas = {}
+        for area_id, traffic in restricted_area_manager.area_traffic.items():
+            robots_in_areas[area_id] = {
+                "robots": traffic['robots'].copy(),
+                "count": len(traffic['robots']),
+                "capacity": traffic.get('capacity', 0)
+            }
+        
+        logger.info(f"[API] Force unlock completed: cleared {cleared_waiting} waiting robots, released {len(robots_to_release)} robots not in areas")
+        
+        return {
+            "status": "success",
+            "cleared_waiting_robots": cleared_waiting,
+            "waiting_robots": waiting_robots,
+            "robots_in_restricted_areas": robots_in_areas,
+            "released_robots": [{"robot_id": r[0], "area_id": r[1]} for r in robots_to_release],
+            "p3_tasks": p3_task_info,
+            "message": f"Force unlock completed. Cleared {cleared_waiting} waiting robots, released {len(robots_to_release)} robots not in areas."
+        }
+    except Exception as e:
+        logger.error(f"[API] Failed to force unlock restricted area: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to force unlock: {str(e)}")
 
