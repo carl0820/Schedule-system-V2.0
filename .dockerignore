@@ -1,0 +1,55 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+.venv
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# 日志
+logs/*.log
+logs/*.log.*
+
+# 数据文件（保留目录结构，但不复制大文件）
+data/tasks.db
+data/tasks.json
+data/maps/*.gz
+
+# Git
+.git/
+.gitignore
+
+# Docker
+Dockerfile
+.dockerignore
+docker-compose.yml
+
+# 文档
+docs/
+*.md
+!README.md
+
+# 测试
+test/
+*.pyc
+
+# 脚本
+*.ps1
+*.sh
+!start_service.sh
+
+# 其他
+.DS_Store
+*.bak
+*.tmp
+

@@ -1,0 +1,37 @@
+version: '3.8'
+
+services:
+  robot-scheduler:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: robot-scheduler
+    ports:
+      - "8092:8092"
+    volumes:
+      # 挂载日志目录，方便查看日志
+      - ./logs:/app/logs
+      # 挂载数据目录，持久化任务和配置
+      - ./data:/app/data
+      # 挂载地图目录（如果需要）
+      - ./data/maps:/app/data/maps
+    environment:
+      # 应用配置
+      - HOST=0.0.0.0
+      - PORT=8092
+      - DEBUG=false
+      # 网络配置（如果需要访问宿主机VPN网络）
+      - NO_PROXY=localhost,127.0.0.1,10.160.0.0/16
+    restart: unless-stopped
+    networks:
+      - robot-network
+    # 如果需要访问宿主机网络（Linux）
+    # network_mode: host
+    # 如果需要访问宿主机服务（Windows/Mac）
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+networks:
+  robot-network:
+    driver: bridge
+
