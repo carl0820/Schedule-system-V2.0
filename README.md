@@ -125,9 +125,35 @@ pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
 
 系统会自动从机器人获取地图和配置信息，无需手动配置。如需自定义配置，可修改 `data/runtime_config.json`。
 
-## 运行
+## 部署
 
-### 启动服务
+### Docker 部署（推荐，适合快速部署）
+
+**快速开始（3步）：**
+
+```bash
+# 1. 克隆代码
+git clone https://github.com/carl0820/Schedule-system-V2.0.git
+cd Schedule-system-V2.0
+
+# 2. 构建并启动
+docker-compose up -d --build
+
+# 3. 访问服务
+# http://localhost:8092/docs
+```
+
+**详细文档：**
+- 📖 [Docker 快速部署指南](docs/DOCKER_QUICK_START.md) - 适合快速上手
+- 📚 [Docker 详细部署文档](docs/DOCKER_DEPLOYMENT.md) - 完整配置说明
+
+**优势：**
+- ✅ 无需安装 Python 环境
+- ✅ 自动处理所有依赖
+- ✅ 一键启动，开箱即用
+- ✅ 环境隔离，不影响系统
+
+### 本地部署
 
 **Windows:**
 ```powershell
@@ -141,13 +167,13 @@ python main.py
 
 **或使用 uvicorn:**
 ```bash
-uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+uvicorn main:app --host 0.0.0.0 --port 8092 --reload
 ```
 
 服务启动后，访问：
-- **首页**: http://localhost:8000
-- **API文档**: http://localhost:8000/docs
-- **健康检查**: http://localhost:8000/health
+- **首页**: http://localhost:8092
+- **API文档**: http://localhost:8092/docs
+- **健康检查**: http://localhost:8092/health
 
 ## API使用示例
 
