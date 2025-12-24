@@ -560,6 +560,7 @@
         let autoRefreshInterval = null;
         let isRefreshing = false;
         let lastRefreshTime = 0;
+        let currentRequestController = null; // 当前请求的AbortController
         
         // 分页相关
         let currentPage = 1;
@@ -578,8 +579,8 @@
             } else {
                 refreshData();
             }
-            // 自动刷新（每2秒，与首页保持一致，更快显示新任务）
-            autoRefreshInterval = setInterval(refreshData, 2000);
+            // 自动刷新（每3秒，减少频率以避免频繁超时）
+            autoRefreshInterval = setInterval(refreshData, 3000);
         };
         
         // 页面获得焦点时立即刷新（确保从其他页面返回时能看到最新任务）
@@ -607,13 +608,23 @@
                 console.log('Already refreshing, skipping...');
                 return; // 如果正在刷新，跳过
             }
-            if (!force && now - lastRefreshTime < 500) {
+            if (!force && now - lastRefreshTime < 1000) {
                 console.log('Too soon since last refresh, skipping...');
-                return; // 如果距离上次刷新不到500ms，跳过（防止过于频繁）
+                return; // 如果距离上次刷新不到1秒，跳过（防止过于频繁）
+            }
+            
+            // 取消之前的请求（如果有）
+            if (currentRequestController) {
+                console.log('Cancelling previous request...');
+                currentRequestController.abort();
             }
             
             isRefreshing = true;
             lastRefreshTime = now;
+            
+            // 创建新的请求控制器
+            const controller = new AbortController();
+            currentRequestController = controller;
             
             console.log('Starting to fetch tasks...');
             
@@ -639,12 +650,11 @@
                 const url = `${API_BASE}/api/tasks/?${params.toString()}`;
                 console.log('Fetching from:', url);
                 
-                // 获取任务列表（带分页，添加超时控制，缩短超时时间到10秒）
-                const controller = new AbortController();
+                // 获取任务列表（带分页，添加超时控制，缩短超时时间到5秒，与API超时匹配）
                 const timeoutId = setTimeout(() => {
-                    console.error('Request timeout after 10 seconds');
+                    console.error('Request timeout after 5 seconds');
                     controller.abort();
-                }, 10000); // 10秒超时
+                }, 5000); // 5秒超时，与API的3秒超时匹配，留出缓冲
                 
                 let data;
                 try {
@@ -652,6 +662,12 @@
                         signal: controller.signal
                     });
                     clearTimeout(timeoutId);
+                    
+                    // 检查请求是否已被取消
+                    if (controller.signal.aborted) {
+                        console.log('Request was cancelled, ignoring response');
+                        return;
+                    }
                     
                     console.log('Response status:', tasksResponse.status, tasksResponse.statusText);
                     
@@ -675,8 +691,15 @@
                 } catch (fetchError) {
                     clearTimeout(timeoutId);
                     console.error('Fetch error:', fetchError);
+                    
+                    // 如果请求被取消，不显示错误
+                    if (fetchError.name === 'AbortError' && controller.signal.aborted) {
+                        console.log('Request was cancelled, not showing error');
+                        return;
+                    }
+                    
                     if (fetchError.name === 'AbortError') {
-                        throw new Error('请求超时（10秒），请稍后重试');
+                        throw new Error('请求超时（5秒），请稍后重试');
                     }
                     throw fetchError;
                 }
@@ -723,32 +746,58 @@
                     console.error('updatePagination function not found');
                 }
                 console.log('Data refresh completed successfully');
+                
+                // 清除请求控制器
+                currentRequestController = null;
             } catch (error) {
+                // 如果请求被取消，不显示错误
+                if (error.name === 'AbortError' && controller.signal.aborted) {
+                    console.log('Request was cancelled, not showing error');
+                    currentRequestController = null;
+                    isRefreshing = false;
+                    return;
+                }
+                
                 console.error('Failed to fetch tasks:', error);
                 console.error('Error stack:', error.stack);
                 const errorMsg = error.message || '未知错误';
+                
+                // 只在没有其他请求进行时才显示错误
+                // 如果很快自动刷新会成功，就不显示错误，避免闪烁
                 const taskListEl = document.getElementById('taskList');
-                if (taskListEl) {
-                    taskListEl.innerHTML = `
-                        <div class="loading" style="color: #dc3545; padding: 2rem;">
-                            <h3>加载失败</h3>
-                            <p><strong>错误信息:</strong> ${errorMsg}</p>
-                            <p>请检查：</p>
-                            <ul style="text-align: left; margin: 1rem 0;">
-                                <li>网络连接是否正常</li>
-                                <li>服务是否正在运行</li>
-                                <li>浏览器控制台是否有更多错误信息</li>
-                            </ul>
-                            <button onclick="location.reload()" class="btn btn-primary" style="margin-top: 1rem;">刷新页面</button>
-                            <button onclick="refreshData(true)" class="btn btn-secondary" style="margin-top: 0.5rem; margin-left: 0.5rem;">重试</button>
-                        </div>
-                    `;
+                if (taskListEl && !controller.signal.aborted) {
+                    // 延迟显示错误，如果很快就有新请求，就不显示
+                    const errorTimeout = setTimeout(() => {
+                        // 再次检查是否还在刷新中
+                        if (!isRefreshing && taskListEl) {
+                            taskListEl.innerHTML = `
+                                <div class="loading" style="color: #dc3545; padding: 2rem;">
+                                    <h3>加载失败</h3>
+                                    <p><strong>错误信息:</strong> ${errorMsg}</p>
+                                    <p>请检查：</p>
+                                    <ul style="text-align: left; margin: 1rem 0;">
+                                        <li>网络连接是否正常</li>
+                                        <li>服务是否正在运行</li>
+                                        <li>浏览器控制台是否有更多错误信息</li>
+                                    </ul>
+                                    <button onclick="location.reload()" class="btn btn-primary" style="margin-top: 1rem;">刷新页面</button>
+                                    <button onclick="refreshData(true)" class="btn btn-secondary" style="margin-top: 0.5rem; margin-left: 0.5rem;">重试</button>
+                                </div>
+                            `;
+                        }
+                    }, 500); // 延迟500ms显示错误，如果很快刷新成功就不显示
+                    
+                    // 如果很快有新请求，取消错误显示
+                    const originalIsRefreshing = isRefreshing;
+                    setTimeout(() => {
+                        if (isRefreshing !== originalIsRefreshing) {
+                            clearTimeout(errorTimeout);
+                        }
+                    }, 100);
                 }
-                // 隐藏分页控件
-                const paginationEl = document.getElementById('pagination');
-                if (paginationEl) {
-                    paginationEl.style.display = 'none';
-                }
+                
+                // 清除请求控制器
+                currentRequestController = null;
             } finally {
                 isRefreshing = false;
                 console.log('Refresh completed, isRefreshing set to false');
