@@ -1103,32 +1103,32 @@ class TaskScheduler:
                         reverse=True
                     )
                 
-                # 重新检查可用机器人（使用缓存状态，只查询在线机器人）
-                # 使用相同的优化策略：优先使用缓存
-                cached_states = {}
-                online_robot_ids = []
+                # 优化：复用之前查询的机器人状态，避免重复查询
+                # 只更新需要更新的机器人状态（缓存超过3秒的）
+                online_robot_ids_to_update = []
                 for robot_id in robot_ids:
-                    cached_state = self.robot_manager.robot_states.get(robot_id)
-                    if cached_state and cached_state.last_update_time:
+                    cached_state = cached_states.get(robot_id)
+                    if not cached_state or cached_state.status == RobotStatus.OFFLINE:
+                        online_robot_ids_to_update.append(robot_id)
+                    elif cached_state.last_update_time:
                         time_since_update = (datetime.now() - cached_state.last_update_time).total_seconds()
-                        if time_since_update < 5.0 and cached_state.status != RobotStatus.OFFLINE:
-                            cached_states[robot_id] = cached_state
-                            continue
-                    if not cached_state or cached_state.status != RobotStatus.OFFLINE:
-                        online_robot_ids.append(robot_id)
+                        if time_since_update >= 3.0:  # 缓存超过3秒才更新
+                            online_robot_ids_to_update.append(robot_id)
                 
-                if online_robot_ids:
+                # 只更新需要更新的机器人状态（并发查询，使用短超时）
+                if online_robot_ids_to_update:
                     robot_states = await asyncio.gather(
                         *[asyncio.wait_for(
                             self.robot_manager.get_robot_state(robot_id, force_update=True),
-                            timeout=1.5
-                        ) for robot_id in online_robot_ids],
+                            timeout=1.0  # 减少超时时间到1秒，更快响应
+                        ) for robot_id in online_robot_ids_to_update],
                         return_exceptions=True
                     )
-                    for robot_id, state in zip(online_robot_ids, robot_states):
+                    for robot_id, state in zip(online_robot_ids_to_update, robot_states):
                         if not isinstance(state, Exception) and state:
                             cached_states[robot_id] = state
                 
+                # 重新计算可用机器人（基于更新后的状态）
                 available_robots = []
                 for robot_id in robot_ids:
                     state = cached_states.get(robot_id)
@@ -2495,11 +2495,14 @@ class TaskScheduler:
         try:
             await self.restricted_area_traffic_manager.monitor_robots()
             # 检查等待队列，让可以通行的机器人继续执行任务
+            # 注意：check_waiting_robots 内部会调用 _check_and_resume_waiting_robots
+            # 但为了确保及时恢复，这里也调用一次
             await self.restricted_area_traffic_manager.check_waiting_robots()
         except Exception as e:
             logger.debug(f"Failed to monitor restricted areas: {e}")
         
         # 检查等待中的机器人是否可以恢复任务
+        # 优化：即使 check_waiting_robots 已调用，这里也再次检查，确保没有遗漏
         await self._check_and_resume_waiting_robots()
         
         # 检查所有执行中或已分配的任务

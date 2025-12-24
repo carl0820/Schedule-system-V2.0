@@ -758,8 +758,11 @@ class RestrictedAreaTrafficManager:
                             )
                             # 清除action_id，准备重新执行
                             task.action_id = None
-                            # 触发任务恢复
+                            # 立即触发任务恢复（不等待调度循环）
                             await self.task_scheduler._check_and_resume_waiting_robots()
+                            # 触发调度事件，确保任务立即被处理
+                            if self.task_scheduler._scheduler_event:
+                                self.task_scheduler._scheduler_event.set()
                     except Exception as e:
                         logger.warning(f"[RESTRICTED AREA] Failed to trigger task resume for robot {robot_id}: {e}")
                 
@@ -788,7 +791,11 @@ class RestrictedAreaTrafficManager:
                                     f"[RESTRICTED AREA] Triggering immediate task resume for robot {robot_id}, task {task_id}"
                                 )
                                 task.action_id = None
+                                # 立即触发任务恢复（不等待调度循环）
                                 await self.task_scheduler._check_and_resume_waiting_robots()
+                                # 触发调度事件，确保任务立即被处理
+                                if self.task_scheduler._scheduler_event:
+                                    self.task_scheduler._scheduler_event.set()
                         except Exception as e:
                             logger.warning(f"[RESTRICTED AREA] Failed to trigger task resume for robot {robot_id}: {e}")
     

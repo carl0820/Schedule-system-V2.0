@@ -163,16 +163,16 @@ async def list_tasks(
         # 添加超时保护，确保即使数据库查询很慢也能快速返回
         try:
             # 并发获取总数和当前页任务（提高响应速度）
-            # 增加超时时间到8秒，给数据库查询和转换留出足够时间
+            # 优化：减少超时时间到3秒，确保快速响应
             total_count, tasks = await asyncio.wait_for(
                 asyncio.gather(
                     task_scheduler.count_tasks(status, robot_id),
                     task_scheduler.list_tasks(status, robot_id, limit=limit, offset=offset)
                 ),
-                timeout=8.0  # 8秒超时，给数据库查询和任务转换留出足够时间
+                timeout=3.0  # 3秒超时，确保快速响应
             )
         except asyncio.TimeoutError:
-            logger.error("Task list query timeout, returning empty list")
+            logger.error("Task list query timeout (3.0s), returning empty list")
             tasks = []
             total_count = 0
         
@@ -329,44 +329,11 @@ async def list_tasks(
         import time
         dict_start = time.time()
         
-        # 预先收集所有需要获取充电桩坐标的GO_HOME任务，并发获取
-        go_home_tasks = {}
-        for task in tasks:
-            if task.is_multi_action and task.actions:
-                last_action = task.actions[-1] if task.actions else None
-                if last_action:
-                    last_action_type = last_action.action_type if hasattr(last_action, 'action_type') else last_action.get('action_type')
-                    if last_action_type == "go_home" and task.robot_id:
-                        go_home_tasks[task.task_id] = task.robot_id
-        
-        # 并发获取所有充电桩坐标（带超时控制）
+        # 优化：完全跳过充电桩坐标查询，直接使用默认值(0,0,0)
+        # 充电桩坐标查询经常超时，导致API响应慢，暂时禁用以提高响应速度
+        # 如果需要充电桩坐标，可以在任务详情页面单独查询
         dock_poses = {}
-        if go_home_tasks:
-            async def get_dock_pose(robot_id, task_id):
-                try:
-                    agent = robot_manager.get_robot_agent(robot_id)
-                    if agent:
-                        return task_id, await asyncio.wait_for(
-                            agent.get_home_dock_pose(),
-                            timeout=1.5  # 1.5秒超时，避免累积超时
-                        )
-                except asyncio.TimeoutError:
-                    logger.debug(f"Timeout getting home dock pose for robot {robot_id} (task {task_id})")
-                except Exception as e:
-                    logger.debug(f"Failed to get home dock pose for robot {robot_id} (task {task_id}): {e}")
-                return task_id, None
-            
-            # 并发获取所有充电桩坐标
-            dock_results = await asyncio.gather(*[
-                get_dock_pose(robot_id, task_id) 
-                for task_id, robot_id in go_home_tasks.items()
-            ], return_exceptions=True)
-            
-            for result in dock_results:
-                if isinstance(result, tuple) and len(result) == 2:
-                    task_id, dock_pose = result
-                    if dock_pose:
-                        dock_poses[task_id] = dock_pose
+        logger.debug("Skipping dock pose query for faster API response")
         
         result = []
         for task in tasks:
@@ -474,8 +441,24 @@ async def list_tasks(
                 if task.target_pose:
                     target_poi_name = find_poi_name(task.target_pose.x, task.target_pose.y)
             
-            # 将Task对象转换为字典
-            task_dict = task.dict()
+            # 将Task对象转换为字典（优化：使用model_dump以提高性能）
+            try:
+                # 优先使用Pydantic v2的model_dump方法（更快）
+                if hasattr(task, 'model_dump'):
+                    task_dict = task.model_dump()
+                else:
+                    # 回退到dict方法（Pydantic v1）
+                    task_dict = task.dict()
+            except Exception as e:
+                logger.warning(f"Failed to convert task {task.task_id} to dict: {e}, using fallback")
+                # 如果转换失败，使用基本字段
+                task_dict = {
+                    "task_id": task.task_id,
+                    "status": task.status.value if hasattr(task.status, 'value') else str(task.status),
+                    "robot_id": task.robot_id,
+                    "target_pose": task.target_pose.dict() if task.target_pose and hasattr(task.target_pose, 'dict') else None,
+                    "created_at": task.created_at.isoformat() if task.created_at else None,
+                }
             # 添加target_poi_name字段
             task_dict["target_poi_name"] = target_poi_name
             result.append(task_dict)
