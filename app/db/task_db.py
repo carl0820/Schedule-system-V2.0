@@ -592,4 +592,87 @@ class TaskDatabase:
         except Exception as e:
             logger.error(f"Failed to count tasks: {e}", exc_info=True)
             return 0
+    
+    def count_completed_tasks_today(self) -> int:
+        """
+        获取当日已完成任务数量
+        
+        Returns:
+            当日已完成任务数量
+        """
+        try:
+            from datetime import datetime, date
+            today = date.today()
+            today_start_str = today.strftime("%Y-%m-%d")
+            
+            with self._get_connection() as conn:
+                cursor = conn.cursor()
+                # 查询当日已完成的任务（status='completed' 且 completed_at 在今天）
+                # 使用日期字符串匹配（completed_at 格式为 ISO 格式，如 "2025-12-24T10:30:00"）
+                query = """
+                    SELECT COUNT(*) FROM tasks 
+                    WHERE status = ? 
+                    AND completed_at IS NOT NULL
+                    AND completed_at LIKE ?
+                """
+                # 使用 LIKE 匹配日期部分（如 "2025-12-24%"）
+                pattern = f"{today_start_str}%"
+                status_value = TaskStatus.COMPLETED.value
+                cursor.execute(
+                    query, 
+                    (
+                        status_value,
+                        pattern
+                    )
+                )
+                count = cursor.fetchone()[0]
+                logger.info(f"Counted {count} completed tasks today (date: {today_start_str}, pattern: {pattern}, status: {status_value})")
+                
+                # 如果返回0，再次验证查询
+                if count == 0:
+                    # 直接查询验证
+                    cursor.execute("SELECT COUNT(*) FROM tasks WHERE status = ? AND completed_at LIKE ?", (status_value, pattern))
+                    verify_count = cursor.fetchone()[0]
+                    if verify_count != count:
+                        logger.warning(f"Query mismatch: original={count}, verify={verify_count}")
+                        count = verify_count
+                
+                # 调试：如果返回0，检查是否有任何已完成的任务
+                if count == 0:
+                    cursor.execute("SELECT COUNT(*) FROM tasks WHERE status = ?", (TaskStatus.COMPLETED.value,))
+                    total_completed = cursor.fetchone()[0]
+                    if total_completed > 0:
+                        # 检查最近的已完成任务的completed_at日期
+                        cursor.execute("SELECT completed_at FROM tasks WHERE status = ? ORDER BY completed_at DESC LIMIT 5", (TaskStatus.COMPLETED.value,))
+                        recent_dates = cursor.fetchall()
+                        logger.info(f"Total completed tasks: {total_completed}, Recent completed_at dates: {[row[0] for row in recent_dates]}")
+                        # 尝试直接查询今天的数据
+                        cursor.execute(query, (TaskStatus.COMPLETED.value, pattern))
+                        direct_count = cursor.fetchone()[0]
+                        logger.info(f"Direct query with pattern '{pattern}': {direct_count} tasks")
+                        if direct_count > 0:
+                            count = direct_count
+                            logger.info(f"Updated count from 0 to {count} after direct query")
+                
+                logger.info(f"Final count: {count} completed tasks today")
+                return count
+        except Exception as e:
+            logger.error(f"Failed to count completed tasks today: {e}", exc_info=True)
+            import traceback
+            logger.error(traceback.format_exc())
+            # 如果查询失败，尝试直接查询作为fallback
+            try:
+                from datetime import date
+                today = date.today()
+                today_start_str = today.strftime("%Y-%m-%d")
+                pattern = f"{today_start_str}%"
+                with self._get_connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute("SELECT COUNT(*) FROM tasks WHERE status = ? AND completed_at LIKE ?", ('completed', pattern))
+                    fallback_count = cursor.fetchone()[0]
+                    logger.warning(f"Using fallback query, result: {fallback_count}")
+                    return fallback_count
+            except Exception as fallback_error:
+                logger.error(f"Fallback query also failed: {fallback_error}")
+                return 0
 

@@ -55,7 +55,10 @@ logger.info(f"日志文件已配置: {log_file}")
 app = FastAPI(
     title=settings.APP_NAME,
     version=settings.APP_VERSION,
-    description="多机器人调度系统 - 基于思岚科技底盘REST API"
+    description="多机器人调度系统 - 基于思岚科技底盘REST API",
+    openapi_url="/openapi.json",
+    docs_url="/docs",
+    redoc_url="/redoc"
 )
 
 # 定制OpenAPI schema，移除start_pose字段，添加安全定义
@@ -70,6 +73,14 @@ def custom_openapi():
         description=app.description,
         routes=app.routes,
     )
+    # 调试：输出所有路由路径（特别是multi-action相关的）
+    import logging
+    logger = logging.getLogger(__name__)
+    logger.info("OpenAPI routes (multi-action related):")
+    for route in app.routes:
+        if hasattr(route, 'path') and 'multi-action' in route.path:
+            methods = route.methods if hasattr(route, 'methods') else 'N/A'
+            logger.info(f"  {methods} {route.path}")
     
     # 认证已移除，所有API端点无需授权即可调用
     # 不再添加安全定义和安全要求
@@ -93,7 +104,7 @@ def custom_openapi():
                     r for r in schemas["MultiActionTaskCreate"]["required"] 
                     if r != "start_pose"
                 ]
-    # 不缓存schema，确保每次请求都重新生成
+    # 设置schema，确保被注册
     app.openapi_schema = openapi_schema
     return openapi_schema
 

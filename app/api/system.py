@@ -1,28 +1,107 @@
 """
 系统监控API
 """
-from fastapi import APIRouter, HTTPException, Query
+import logging
+from fastapi import APIRouter, HTTPException, Query, Depends
 from pydantic import BaseModel
 from typing import Dict, Any, Optional, List
 from app.services.config_manager import get_config_manager
 from app.services.network_detector import get_network_detector, NetworkType
-from app.services.robot_manager import get_robot_manager
+from app.services.robot_manager import get_robot_manager, RobotManager
 from app.services.deadlock_monitor import get_deadlock_monitor
+from app.services.task_scheduler import get_task_scheduler, TaskScheduler
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
 @router.get("/status", response_model=dict)
-async def get_system_status():
+async def get_system_status(
+    robot_manager: RobotManager = Depends(get_robot_manager),
+    task_scheduler: TaskScheduler = Depends(get_task_scheduler)
+):
     """
     获取系统状态
+    
+    Returns:
+        系统状态信息，包括：
+        - status: 系统运行状态
+        - robots: 在线机器人数量
+        - tasks: 当日已完成任务数量
+        - maps: 已加载地图数量（暂未实现）
     """
-    return {
-        "status": "running",
-        "robots": 0,  # TODO: 从机器人管理器获取
-        "tasks": 0,  # TODO: 从任务调度器获取
-        "maps": 0  # TODO: 从地图管理器获取
-    }
+    try:
+        # 获取在线机器人数量
+        robot_ids = robot_manager.list_available_robots()
+        online_robots = 0
+        for robot_id in robot_ids:
+            try:
+                state = await robot_manager.get_robot_state(robot_id)
+                if state and state.status.value.lower() != "offline":
+                    online_robots += 1
+            except Exception:
+                pass  # 忽略单个机器人状态获取失败
+        
+        # 获取当日已完成任务数量
+        completed_tasks_today = 0
+        try:
+            logger.info("Starting to count completed tasks today...")
+            # 直接查询数据库，避免方法调用可能的问题
+            from datetime import date
+            import sqlite3
+            import os
+            from pathlib import Path
+            today = date.today().strftime('%Y-%m-%d')
+            pattern = f"{today}%"
+            # 确保db_path是绝对路径
+            db_path = task_scheduler.task_db.db_path
+            logger.info(f"Original db_path: {db_path}, type: {type(db_path)}")
+            if isinstance(db_path, Path):
+                db_path = str(db_path.resolve())
+            else:
+                db_path = str(Path(db_path).resolve())
+            
+            logger.info(f"Querying database at: {db_path}, pattern: {pattern}, exists: {os.path.exists(db_path)}")
+            
+            if os.path.exists(db_path):
+                try:
+                    conn = sqlite3.connect(db_path)
+                    cursor = conn.cursor()
+                    cursor.execute("SELECT COUNT(*) FROM tasks WHERE status = ? AND completed_at LIKE ?", ('completed', pattern))
+                    completed_tasks_today = cursor.fetchone()[0]
+                    conn.close()
+                    logger.info(f"System status: completed tasks today = {completed_tasks_today} (direct query, pattern={pattern})")
+                except Exception as db_error:
+                    logger.error(f"Direct database query failed: {db_error}", exc_info=True)
+                    import traceback
+                    logger.error(traceback.format_exc())
+                    # Fallback to method
+                    completed_tasks_today = task_scheduler.task_db.count_completed_tasks_today()
+                    logger.info(f"System status: completed tasks today = {completed_tasks_today} (method fallback)")
+            else:
+                logger.warning(f"Database file not found: {db_path}")
+                completed_tasks_today = 0
+        except Exception as e:
+            logger.error(f"Failed to count completed tasks today: {e}", exc_info=True)
+            import traceback
+            logger.error(traceback.format_exc())
+            completed_tasks_today = 0
+        
+        return {
+            "status": "running",
+            "robots": online_robots,
+            "tasks": completed_tasks_today,  # 当日已完成任务数量
+            "maps": 0  # TODO: 从地图管理器获取
+        }
+    except Exception as e:
+        # 如果获取状态失败，返回默认值
+        logger.error(f"Failed to get system status: {e}", exc_info=True)
+        return {
+            "status": "running",
+            "robots": 0,
+            "tasks": 0,
+            "maps": 0
+        }
 
 
 @router.get("/metrics", response_model=dict)

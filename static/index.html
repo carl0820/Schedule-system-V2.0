@@ -1599,6 +1599,20 @@
             }
         }
         
+        // 获取系统状态（包括当日已完成任务数量）
+        async function fetchSystemStatus() {
+            try {
+                const response = await fetch(`${API_BASE}/api/system/status`);
+                if (response.ok) {
+                    const statusData = await response.json();
+                    return statusData;
+                }
+            } catch (error) {
+                console.warn('Failed to fetch system status:', error);
+            }
+            return null;
+        }
+        
         function updateStatus(data) {
             try {
                 // 只有在连接成功时才更新为"运行中"
@@ -1614,12 +1628,27 @@
                     return status !== 'offline' && status !== 'OFFLINE';
                 });
                 const robotCount = onlineRobots.length;
-                const taskCount = data && data.tasks ? data.tasks.length : 0;
+                
+                // 从系统状态API获取当日已完成任务数量
+                fetchSystemStatus().then(statusData => {
+                    if (statusData && statusData.tasks !== undefined) {
+                        document.getElementById('taskCount').textContent = statusData.tasks;
+                        if (window.DEBUG_MODE) {
+                            console.log(`系统状态更新 - 在线机器人数量: ${robotCount}/${robots.length}, 当日已完成任务数量: ${statusData.tasks}`);
+                        }
+                    } else {
+                        // 如果API调用失败，使用默认值0
+                        document.getElementById('taskCount').textContent = 0;
+                    }
+                }).catch(error => {
+                    console.warn('Error fetching system status:', error);
+                    document.getElementById('taskCount').textContent = 0;
+                });
+                
                 document.getElementById('robotCount').textContent = robotCount;
-                document.getElementById('taskCount').textContent = taskCount;
                 // 只在调试模式下输出系统状态更新日志
                 if (window.DEBUG_MODE) {
-                    console.log(`系统状态更新 - 在线机器人数量: ${robotCount}/${robots.length}, 任务数量: ${taskCount}`);
+                    console.log(`系统状态更新 - 在线机器人数量: ${robotCount}/${robots.length}`);
                 }
             } catch (error) {
                 console.error('Error updating status:', error);
