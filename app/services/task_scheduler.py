@@ -18,6 +18,7 @@ from app.services.collision_detector import CollisionDetector
 from app.services.avoidance_strategy import AvoidanceStrategy
 from app.services.deadlock_detector import DeadlockDetector
 from app.services.priority_calculator import PriorityCalculator
+from app.services.config_manager import ConfigManager
 from app.models.robot import Pose, RobotStatus
 from app.db.task_db import TaskDatabase
 
@@ -124,9 +125,9 @@ class TaskScheduler:
         from app.services.config_manager import get_config_manager
         from app.services.map_manager import get_map_manager
         map_manager = get_map_manager()
-        config_manager = get_config_manager()
+        self.config_manager = get_config_manager()  # 保存为实例变量，供任务超时检测使用
         self.restricted_area_traffic_manager = RestrictedAreaTrafficManager(
-            map_manager, robot_manager, path_planner, config_manager, task_scheduler=self
+            map_manager, robot_manager, path_planner, self.config_manager, task_scheduler=self
         )
         # 注意：POI等待点将在异步上下文中加载（在_start_background_tasks_if_needed_async中）
         
@@ -664,6 +665,49 @@ class TaskScheduler:
         logger.info(f"Multi-action task {task_id} returning immediately (task is in memory and can be queried)")
         return task
     
+    async def create_multi_action_task_for_robot(self, robot_id: str, task_create: MultiActionTaskCreate) -> Task:
+        """
+        给指定机器人创建多动作任务（直接分配给指定机器人）
+        
+        Args:
+            robot_id: 指定的机器人ID
+            task_create: 多动作任务创建请求
+            
+        Returns:
+            创建的任务（已分配给指定机器人）
+        """
+        # 先创建任务（复用现有逻辑）
+        task = await self.create_multi_action_task(task_create)
+        
+        # 直接分配给指定机器人
+        task.robot_id = robot_id
+        task.status = TaskStatus.ASSIGNED
+        task.assigned_at = datetime.now()
+
+        logger.info(f"Multi-action task {task.task_id} assigned directly to robot {robot_id}")
+
+        # 保存任务（更新状态）
+        self.tasks[task.task_id] = task
+
+        # 【修复3】同步保存到数据库（关键状态变更）
+        self.task_db.save_task(task)
+        # 异步保存到文件
+        asyncio.create_task(self._save_tasks_to_file_async())
+        
+        # 立即触发调度检查，让任务开始执行
+        if self._scheduler_event is not None:
+            self._scheduler_event.set()
+        else:
+            self._scheduler_event = asyncio.Event()
+            self._scheduler_event.set()
+        
+        # 启动调度器（如果还没有启动）
+        if self._scheduler_task is None or self._scheduler_task.done():
+            logger.info("Starting scheduler loop...")
+            self._scheduler_task = asyncio.create_task(self._scheduler_loop())
+        
+        return task
+    
     async def get_task(self, task_id: str) -> Optional[Task]:
         """
         获取任务信息（从数据库读取，确保数据一致性）
@@ -776,14 +820,16 @@ class TaskScheduler:
         # 更新任务状态
         task.status = TaskStatus.CANCELLED
         task.completed_at = datetime.now()
-        
+
         # 清理任务的规划路径
         if task.task_id in self.task_paths:
             del self.task_paths[task.task_id]
-        
+
+        # 【修复3】同步保存到数据库（关键状态变更）
+        self.task_db.save_task(task)
         # 持久化到文件
         self._save_tasks_to_file()
-        
+
         logger.info(f"Task {task_id} cancelled")
         return True
     
@@ -1490,6 +1536,8 @@ class TaskScheduler:
                             task.status = TaskStatus.ASSIGNED
                             task.assigned_at = datetime.now()
                             task.retry_count = 0
+                            # 【修复3】同步保存到数据库（关键状态变更）
+                            self.task_db.save_task(task)
                             self._save_tasks_to_file()
                             
                             # 移动到等待点
@@ -1530,6 +1578,8 @@ class TaskScheduler:
             task.status = TaskStatus.ASSIGNED
             task.assigned_at = datetime.now()
             task.retry_count = 0  # 重置重试计数
+            # 【修复3】同步保存到数据库（关键状态变更）
+            self.task_db.save_task(task)
             
             # 如果是多动作任务且最后一个动作是GO_HOME，尝试获取充电桩的实际坐标
             if task.is_multi_action and task.actions:
@@ -2508,15 +2558,106 @@ class TaskScheduler:
         # 检查所有执行中或已分配的任务
         executing_tasks = [
             t for t in self.tasks.values()
-            if (t.status == TaskStatus.EXECUTING or t.status == TaskStatus.ASSIGNED) 
+            if (t.status == TaskStatus.EXECUTING or t.status == TaskStatus.ASSIGNED)
             and t.robot_id
         ]
-        
+
         if not executing_tasks:
             return
-        
+
         logger.info(f"Checking {len(executing_tasks)} executing/assigned tasks for status updates")
-        
+
+        # 【修复1】检测并清理卡住的任务（长时间处于executing状态但机器人无action的任务）
+        stuck_tasks = []
+        for task in executing_tasks:
+            # 检查任务是否卡住：执行中状态超过10分钟
+            if task.status == TaskStatus.EXECUTING and task.assigned_at:
+                executing_duration = (datetime.now() - task.assigned_at).total_seconds()
+                if executing_duration > 600:  # 10分钟
+                    # 检查机器人是否真的有action在执行
+                    try:
+                        agent = self.robot_manager.get_robot_agent(task.robot_id)
+                        if agent:
+                            current_action = await asyncio.wait_for(agent.get_current_action(), timeout=2.0)
+                            if not current_action or not current_action.action_id:
+                                # 机器人没有执行中的action，但任务状态是executing，任务卡住了
+                                logger.warning(
+                                    f"Detected stuck task {task.task_id}: status=EXECUTING for {executing_duration:.0f}s "
+                                    f"but robot {task.robot_id} has no active action. Will attempt recovery."
+                                )
+                                stuck_tasks.append(task)
+                    except asyncio.TimeoutError:
+                        logger.debug(f"Timeout checking action for task {task.task_id}, will retry later")
+                    except Exception as e:
+                        logger.debug(f"Error checking action for task {task.task_id}: {e}")
+
+        # 尝试恢复卡住的任务
+        for task in stuck_tasks:
+            try:
+                agent = self.robot_manager.get_robot_agent(task.robot_id)
+                if agent:
+                    logger.info(f"Attempting to recover stuck task {task.task_id}")
+                    await self._recover_task_with_invalid_action_id(task, agent, task.robot_id)
+            except Exception as e:
+                logger.error(f"Failed to recover stuck task {task.task_id}: {e}", exc_info=True)
+                # 如果恢复失败，标记任务为失败并释放机器人
+                task.status = TaskStatus.FAILED
+                task.error_message = f"Task stuck in executing status and recovery failed: {e}"
+                task.completed_at = datetime.now()
+                # 立即同步到数据库
+                self.task_db.save_task(task)
+                self._save_tasks_to_file()
+                logger.warning(f"Task {task.task_id} marked as FAILED after recovery attempt failed")
+
+        # 【修复4】检测并标记超时的任务
+        task_execution_config = self.config_manager.get_task_execution_config()
+        if task_execution_config.get("task_timeout_enabled", True):
+            task_timeout = task_execution_config.get("task_timeout_seconds", 300)
+            multi_action_timeout = task_execution_config.get("multi_action_timeout_seconds", 600)
+
+            timed_out_tasks = []
+            for task in executing_tasks:
+                if task.status in [TaskStatus.EXECUTING, TaskStatus.ASSIGNED] and task.assigned_at:
+                    execution_duration = (datetime.now() - task.assigned_at).total_seconds()
+                    timeout_threshold = multi_action_timeout if task.is_multi_action else task_timeout
+
+                    if execution_duration > timeout_threshold:
+                        logger.warning(
+                            f"【修复4】Task {task.task_id} timed out: "
+                            f"execution_duration={execution_duration:.0f}s > timeout_threshold={timeout_threshold}s"
+                        )
+                        timed_out_tasks.append(task)
+
+            # 标记超时任务为失败
+            for task in timed_out_tasks:
+                try:
+                    # 计算执行时长
+                    if task.assigned_at:
+                        execution_duration = (datetime.now() - task.assigned_at).total_seconds()
+                    else:
+                        execution_duration = 0
+
+                    # 尝试取消机器人的当前动作
+                    if task.robot_id:
+                        agent = self.robot_manager.get_robot_agent(task.robot_id)
+                        if agent and task.action_id:
+                            try:
+                                await asyncio.wait_for(agent.cancel_current_action(), timeout=2.0)
+                                logger.info(f"【修复4】Cancelled action for timed out task {task.task_id}")
+                            except Exception as e:
+                                logger.warning(f"【修复4】Failed to cancel action for timed out task {task.task_id}: {e}")
+
+                    # 标记任务为失败
+                    task.status = TaskStatus.FAILED
+                    task.error_message = f"Task execution timed out after {execution_duration:.0f}s"
+                    task.completed_at = datetime.now()
+                    # 立即同步到数据库
+                    self.task_db.save_task(task)
+                    self._save_tasks_to_file()
+                    logger.error(f"【修复4】Task {task.task_id} marked as FAILED due to timeout")
+                except Exception as e:
+                    logger.error(f"【修复4】Error handling timed out task {task.task_id}: {e}", exc_info=True)
+
         for task in executing_tasks:
             # 【修复】为每个任务的更新添加5秒超时保护，防止单个任务阻塞整个更新循环
             try:
@@ -2566,6 +2707,8 @@ class TaskScheduler:
             await self._release_robot_from_restricted_area_on_completion(task)
             if task.task_id in self.task_paths:
                 del self.task_paths[task.task_id]
+            # 【修复3】同步到数据库
+            self.task_db.save_task(task)
             self._save_tasks_to_file()
             logger.info(
                 f"[MULTI-ACTION] Task {task.task_id} completed all {len(task.actions)} actions successfully"
@@ -2831,6 +2974,8 @@ class TaskScheduler:
                                 await self._release_robot_from_restricted_area_on_completion(task)
                                 if task.task_id in self.task_paths:
                                     del self.task_paths[task.task_id]
+                                # 【修复3】同步到数据库
+                                self.task_db.save_task(task)
                                 self._save_tasks_to_file()
                                 logger.info(
                                     f"Task {task.task_id} completed (distance to target: {distance:.2f}m <= {acceptable_precision}m)"
@@ -2861,6 +3006,8 @@ class TaskScheduler:
             await self._release_robot_from_restricted_area_on_completion(task)
             if task.task_id in self.task_paths:
                 del self.task_paths[task.task_id]
+            # 【修复3】同步到数据库
+            self.task_db.save_task(task)
             self._save_tasks_to_file()
             return True
 
@@ -3441,7 +3588,19 @@ class TaskScheduler:
             if not agent:
                 logger.warning(f"Robot agent not found for task {task.task_id}, robot_id={task.robot_id}")
                 return
-                
+
+            # 【修复】如果任务是ASSIGNED状态且没有action_id，说明任务还未启动执行，需要启动第一个动作
+            if task.status == TaskStatus.ASSIGNED and not task.action_id:
+                logger.info(f"Task {task.task_id} is ASSIGNED but not started, starting execution...")
+                if task.is_multi_action and task.actions:
+                    # 多动作任务：启动第一个动作
+                    await self._execute_next_action(task, agent, task.robot_id)
+                    return
+                else:
+                    # 单动作任务：启动任务（保留原有逻辑，但添加日志）
+                    logger.warning(f"Task {task.task_id} is single-action ASSIGNED task without action_id, this should not happen")
+                    # 继续原有逻辑尝试恢复
+
             # 如果是多动作任务且当前是等待动作，不需要查询action状态（等待动作没有action_id）
             if task.is_multi_action and task.actions:
                 if task.current_action_index < len(task.actions):
@@ -4146,17 +4305,25 @@ class TaskScheduler:
     async def _recover_task_with_invalid_action_id(self, task: Task, agent, robot_id: str):
         """
         当action_id失效（404）时，尝试恢复任务
-        
+
         Args:
             task: 任务
             agent: 机器人代理
             robot_id: 机器人ID
         """
+        logger.info(f"【修复2】Starting recovery for task {task.task_id} with invalid action_id on robot {robot_id}")
         try:
             # 检查机器人当前位置
             robot_state = await self.robot_manager.get_robot_state(robot_id)
             if not robot_state or not robot_state.pose:
-                logger.warning(f"Cannot recover task {task.task_id}: robot {robot_id} state unavailable")
+                error_msg = f"Cannot recover task {task.task_id}: robot {robot_id} state unavailable"
+                logger.error(f"【修复2】{error_msg}")
+                # 标记任务失败并同步到数据库
+                task.status = TaskStatus.FAILED
+                task.error_message = "Robot state unavailable during recovery"
+                task.completed_at = datetime.now()
+                self.task_db.save_task(task)
+                self._save_tasks_to_file()
                 return
             
             # 如果是多动作任务，先检查当前动作是否已完成
@@ -4266,18 +4433,41 @@ class TaskScheduler:
                         task.action_id = None
                         # 释放限行区域占用
                         await self._release_robot_from_restricted_area_on_completion(task)
-                        logger.info(f"Task {task.task_id} all actions completed")
+                        logger.info(f"【修复2】Task {task.task_id} all actions completed during recovery")
+                        # 【修复3】同步到数据库
+                        self.task_db.save_task(task)
+                        self._save_tasks_to_file()
                     else:
                         # 执行下一个动作
-                        logger.info(f"Task {task.task_id} continuing to next action {task.current_action_index + 1}")
-                        await self._execute_next_action(task, agent, robot_id)
+                        logger.info(f"【修复2】Task {task.task_id} continuing to next action {task.current_action_index + 1}")
+                        try:
+                            await self._execute_next_action(task, agent, robot_id)
+                        except Exception as e:
+                            error_msg = f"Failed to execute next action during recovery: {e}"
+                            logger.error(f"【修复2】Task {task.task_id} recovery failed: {error_msg}", exc_info=True)
+                            task.status = TaskStatus.FAILED
+                            task.error_message = error_msg
+                            task.completed_at = datetime.now()
+                            # 【修复3】同步到数据库
+                            self.task_db.save_task(task)
+                            self._save_tasks_to_file()
                 else:
                     # 当前动作未完成，重新执行当前动作
                     logger.info(
-                        f"Task {task.task_id} action {task.current_action_index + 1} not completed, "
+                        f"【修复2】Task {task.task_id} action {task.current_action_index + 1} not completed, "
                         f"re-executing current action"
                     )
-                    await self._execute_next_action(task, agent, robot_id)
+                    try:
+                        await self._execute_next_action(task, agent, robot_id)
+                    except Exception as e:
+                        error_msg = f"Failed to re-execute current action during recovery: {e}"
+                        logger.error(f"【修复2】Task {task.task_id} recovery failed: {error_msg}", exc_info=True)
+                        task.status = TaskStatus.FAILED
+                        task.error_message = error_msg
+                        task.completed_at = datetime.now()
+                        # 【修复3】同步到数据库
+                        self.task_db.save_task(task)
+                        self._save_tasks_to_file()
                 return
             
             # 普通任务：检查是否已到达目标
@@ -4290,7 +4480,7 @@ class TaskScheduler:
                 if distance <= acceptable_precision:
                     # 已到达目标，标记为完成
                     logger.info(
-                        f"Task {task.task_id} action_id invalid but robot reached target "
+                        f"【修复2】Task {task.task_id} action_id invalid but robot reached target "
                         f"(distance={distance:.2f}m <= {acceptable_precision}m). Marking as completed."
                     )
                     task.status = TaskStatus.COMPLETED
@@ -4299,6 +4489,8 @@ class TaskScheduler:
                     await self._release_robot_from_restricted_area_on_completion(task)
                     if task.task_id in self.task_paths:
                         del self.task_paths[task.task_id]
+                    # 【修复3】同步到数据库
+                    self.task_db.save_task(task)
                     self._save_tasks_to_file()
                 else:
                     # 未到达目标，检查是否被其他机器人阻塞（死锁检测）
@@ -4319,7 +4511,7 @@ class TaskScheduler:
                     
                     # 重新发送move_to指令
                     logger.info(
-                        f"Task {task.task_id} action_id invalid, robot not at target "
+                        f"【修复2】Task {task.task_id} action_id invalid, robot not at target "
                         f"(distance={distance:.2f}m). Resending move_to command."
                     )
                     try:
@@ -4333,19 +4525,44 @@ class TaskScheduler:
                         task.status = TaskStatus.EXECUTING
                         if task.started_at is None:
                             task.started_at = datetime.now()
-                        logger.info(f"Task {task.task_id} recovered, new action_id={task.action_id}")
+                        logger.info(f"【修复2】Task {task.task_id} recovered successfully, new action_id={task.action_id}")
+                        # 【修复3】同步到数据库
+                        self.task_db.save_task(task)
                         self._save_tasks_to_file()
                     except Exception as e:
+                        error_msg = f"Failed to resend move_to: {e}"
                         logger.error(
-                            f"Failed to resend move_to for task {task.task_id}: {e}. "
-                            f"Robot may be blocked. Will retry later."
+                            f"【修复2】Task {task.task_id} recovery failed: {error_msg}. "
+                            f"Robot may be blocked. Triggering deadlock detection.", exc_info=True
                         )
                         # 如果重新发送失败，可能是被阻塞，触发死锁检测
                         asyncio.create_task(self._trigger_deadlock_detection_for_robot(robot_id))
+                        # 标记任务失败并同步到数据库
+                        task.status = TaskStatus.FAILED
+                        task.error_message = error_msg
+                        task.completed_at = datetime.now()
+                        # 【修复3】同步到数据库
+                        self.task_db.save_task(task)
+                        self._save_tasks_to_file()
             else:
-                logger.warning(f"Task {task.task_id} has no target_pose, cannot recover")
+                error_msg = "Task has no target_pose, cannot recover"
+                logger.error(f"【修复2】Task {task.task_id} {error_msg}")
+                task.status = TaskStatus.FAILED
+                task.error_message = error_msg
+                task.completed_at = datetime.now()
+                # 【修复3】同步到数据库
+                self.task_db.save_task(task)
+                self._save_tasks_to_file()
         except Exception as e:
-            logger.error(f"Failed to recover task {task.task_id} after invalid action_id: {e}", exc_info=True)
+            error_msg = f"Unexpected error during recovery: {e}"
+            logger.error(f"【修复2】Failed to recover task {task.task_id} after invalid action_id: {error_msg}", exc_info=True)
+            # 标记任务失败并同步到数据库
+            task.status = TaskStatus.FAILED
+            task.error_message = error_msg
+            task.completed_at = datetime.now()
+            # 【修复3】同步到数据库
+            self.task_db.save_task(task)
+            self._save_tasks_to_file()
     
     async def _trigger_deadlock_detection_for_robot(self, robot_id: str):
         """
@@ -4458,12 +4675,20 @@ class TaskScheduler:
         如果检测到阻塞，让这些机器人移动到避让点
         """
         try:
+            # 检查配置：如果禁用了自动回桩避让，直接返回
+            from app.services.config_manager import get_config_manager
+            config_manager = get_config_manager()
+            task_completion_config = config_manager.get_task_completion_config()
+            if not task_completion_config.get("auto_go_home_on_blocking", False):
+                logger.info("Auto go-home on blocking is disabled in config, skipping blocking check")
+                return
+
             # 首先检查是否有执行中的任务，如果没有就直接返回，避免在没有任务时仍然检查阻塞
             executing_tasks = [
                 t for t in self.tasks.values()
                 if t.status == TaskStatus.EXECUTING and t.robot_id and t.target_pose
             ]
-            
+
             if not executing_tasks:
                 # 没有执行中的任务，不需要检查阻塞
                 logger.debug("No executing tasks found, skipping blocking check")

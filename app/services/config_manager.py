@@ -108,19 +108,55 @@ class ConfigManager:
 
                 "updated_at": datetime.now().isoformat()
             },
+            "task_completion": {
+                # ========== 任务完成后的行为配置 ==========
+                "auto_go_home_on_blocking": False,  # 完成任务后如果阻塞其他机器人是否自动回桩（默认禁用）
+                "auto_go_home_on_cancel": True,  # 取消任务时是否自动回桩（默认启用，保持原有行为）
+                "auto_go_home_on_avoidance_fail": True,  # 避让失败时是否自动回桩（默认启用，保持原有行为）
+                "updated_at": datetime.now().isoformat()
+            },
+            "task_execution": {
+                # ========== 任务执行超时配置 ==========
+                "task_timeout_enabled": True,  # 是否启用任务超时检测
+                "task_timeout_seconds": 300,  # 任务执行超时时间（秒，默认5分钟）
+                "multi_action_timeout_seconds": 600,  # 多动作任务超时时间（秒，默认10分钟）
+                "updated_at": datetime.now().isoformat()
+            },
             "updated_at": datetime.now().isoformat()
         }
     
     def get_deadlock_config(self) -> Dict[str, Any]:
         """
         获取死锁配置
-        
+
         Returns:
             死锁配置字典
         """
         if "deadlock" not in self._config:
             self._config["deadlock"] = self._get_default_config()["deadlock"]
         return self._config["deadlock"].copy()
+
+    def get_task_completion_config(self) -> Dict[str, Any]:
+        """
+        获取任务完成配置
+
+        Returns:
+            任务完成配置字典
+        """
+        if "task_completion" not in self._config:
+            self._config["task_completion"] = self._get_default_config()["task_completion"]
+        return self._config["task_completion"].copy()
+
+    def get_task_execution_config(self) -> Dict[str, Any]:
+        """
+        获取任务执行配置
+
+        Returns:
+            任务执行配置字典
+        """
+        if "task_execution" not in self._config:
+            self._config["task_execution"] = self._get_default_config()["task_execution"]
+        return self._config["task_execution"].copy()
     
     def update_deadlock_config(self, config: Dict[str, Any]) -> bool:
         """

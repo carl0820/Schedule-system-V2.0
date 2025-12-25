@@ -25,6 +25,12 @@
 - ✅ **性能优化**：异步处理、错误处理、日志优化、任务分配优化
 - ✅ **多动作任务支持**：支持创建包含多个动作的复杂任务（MOVE_TO、WAIT、GO_HOME）
 - ✅ **任务数据库**：SQLite数据库持久化，支持任务历史查询
+- ✅ **任务可靠性增强**（新增）：
+  - 🔧 卡住任务自动检测与恢复（10分钟超时检测）
+  - 🔧 完善的错误处理与日志记录（所有失败路径都有明确日志）
+  - 🔧 关键状态同步数据库（防止状态丢失）
+  - 🔧 任务执行超时保护（单任务5分钟，多动作10分钟）
+- ✅ **指定机器人任务API**：支持直接给指定机器人下发任务，包含8个完整示例
 - ⏳ **可视化界面**：基础Web界面（待进一步优化）
 
 ## 🚀 快速开始
@@ -204,10 +210,10 @@ curl -X POST "http://localhost:8000/api/tasks/" \
   }'
 ```
 
-### 4. 创建多动作任务
+### 4. 创建多动作任务（自动分配机器人）
 
 ```bash
-curl -X POST "http://localhost:8000/api/tasks/multi-action" \
+curl -X POST "http://localhost:8092/api/tasks/multi-action" \
   -H "Content-Type: application/json" \
   -d '{
     "actions": [
@@ -217,7 +223,7 @@ curl -X POST "http://localhost:8000/api/tasks/multi-action" \
       },
       {
         "action_type": "wait",
-        "duration": 55
+        "wait_duration": 10
       },
       {
         "action_type": "move_to",
@@ -227,6 +233,55 @@ curl -X POST "http://localhost:8000/api/tasks/multi-action" \
     "priority": 2
   }'
 ```
+
+### 4.1 给指定机器人创建任务（推荐）
+
+**使用POI导航：**
+```bash
+curl -X POST "http://localhost:8092/api/tasks/multi-action/P3" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "actions": [
+      {
+        "action_type": "move_to",
+        "poi_name": "P04"
+      }
+    ]
+  }'
+```
+
+**使用坐标导航：**
+```bash
+curl -X POST "http://localhost:8092/api/tasks/multi-action/Apollo" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "actions": [
+      {
+        "action_type": "move_to",
+        "target_pose": {"x": 3.8, "y": -2.9, "yaw": 0.0}
+      }
+    ]
+  }'
+```
+
+**多点巡检任务：**
+```bash
+curl -X POST "http://localhost:8092/api/tasks/multi-action/P3" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "actions": [
+      {"action_type": "move_to", "poi_name": "P01"},
+      {"action_type": "wait", "wait_duration": 5.0},
+      {"action_type": "move_to", "poi_name": "P04"},
+      {"action_type": "wait", "wait_duration": 5.0},
+      {"action_type": "move_to", "poi_name": "P08"},
+      {"action_type": "go_home"}
+    ],
+    "priority": 2
+  }'
+```
+
+**更多示例请访问API文档：** http://localhost:8092/docs#/任务管理/create_multi_action_task_for_robot
 
 ### 5. 查询任务列表
 

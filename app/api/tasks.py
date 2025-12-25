@@ -18,6 +18,10 @@ from app.services.restricted_area_traffic_manager import RestrictedAreaTrafficMa
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
+# 注意：路由注册顺序很重要
+# 更具体的路由（带路径参数）必须在更通用的路由之前注册
+# 例如：/multi-action/{robot_id} 必须在 /multi-action 之前
+
 
 
 
@@ -483,16 +487,55 @@ async def list_tasks(
             # 没有时间筛选时，使用数据库查询的总数
             total = total_count
         
-        # 计算统计信息（基于当前页数据，如果需要完整统计需要额外查询）
-        stats = {
-            "total": total,
-            "pending": sum(1 for t in result if t.get("status") == "pending"),
-            "assigned": sum(1 for t in result if t.get("status") == "assigned"),
-            "executing": sum(1 for t in result if t.get("status") == "executing"),
-            "completed": sum(1 for t in result if t.get("status") == "completed"),
-            "failed": sum(1 for t in result if t.get("status") == "failed"),
-            "cancelled": sum(1 for t in result if t.get("status") == "cancelled")
-        }
+        # 计算统计信息（从数据库查询完整统计，而不是只基于当前页）
+        # 优化：并发查询所有状态的统计信息
+        try:
+            stats_tasks = await asyncio.wait_for(
+                asyncio.gather(
+                    task_scheduler.count_tasks(status=TaskStatus.PENDING, robot_id=robot_id),
+                    task_scheduler.count_tasks(status=TaskStatus.ASSIGNED, robot_id=robot_id),
+                    task_scheduler.count_tasks(status=TaskStatus.EXECUTING, robot_id=robot_id),
+                    task_scheduler.count_tasks(status=TaskStatus.COMPLETED, robot_id=robot_id),
+                    task_scheduler.count_tasks(status=TaskStatus.FAILED, robot_id=robot_id),
+                    task_scheduler.count_tasks(status=TaskStatus.CANCELLED, robot_id=robot_id),
+                    return_exceptions=True
+                ),
+                timeout=5.0  # 增加超时时间到5秒
+            )
+            stats = {
+                "total": total,
+                "pending": stats_tasks[0] if not isinstance(stats_tasks[0], Exception) else 0,
+                "assigned": stats_tasks[1] if not isinstance(stats_tasks[1], Exception) else 0,
+                "executing": stats_tasks[2] if not isinstance(stats_tasks[2], Exception) else 0,
+                "completed": stats_tasks[3] if not isinstance(stats_tasks[3], Exception) else 0,
+                "failed": stats_tasks[4] if not isinstance(stats_tasks[4], Exception) else 0,
+                "cancelled": stats_tasks[5] if not isinstance(stats_tasks[5], Exception) else 0
+            }
+            logger.info(f"Stats computed from database: total={total}, completed={stats['completed']}, failed={stats['failed']}, cancelled={stats['cancelled']}")
+        except asyncio.TimeoutError:
+            logger.warning("Stats query timeout, using page-based stats")
+            # 如果查询超时，回退到基于当前页的统计
+            stats = {
+                "total": total,
+                "pending": sum(1 for t in result if t.get("status") == "pending"),
+                "assigned": sum(1 for t in result if t.get("status") == "assigned"),
+                "executing": sum(1 for t in result if t.get("status") == "executing"),
+                "completed": sum(1 for t in result if t.get("status") == "completed"),
+                "failed": sum(1 for t in result if t.get("status") == "failed"),
+                "cancelled": sum(1 for t in result if t.get("status") == "cancelled")
+            }
+        except Exception as e:
+            logger.warning(f"Failed to get stats from database: {e}, using page-based stats")
+            # 如果查询失败，回退到基于当前页的统计
+            stats = {
+                "total": total,
+                "pending": sum(1 for t in result if t.get("status") == "pending"),
+                "assigned": sum(1 for t in result if t.get("status") == "assigned"),
+                "executing": sum(1 for t in result if t.get("status") == "executing"),
+                "completed": sum(1 for t in result if t.get("status") == "completed"),
+                "failed": sum(1 for t in result if t.get("status") == "failed"),
+                "cancelled": sum(1 for t in result if t.get("status") == "cancelled")
+            }
         
         # 分页处理（result已经是当前页的数据，但如果有时间筛选需要重新分页）
         if start_date or end_date:
@@ -544,7 +587,367 @@ async def cancel_task(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/multi-action", response_model=Task)
+@router.post(
+    "/multi-action/{robot_id}",
+    response_model=Task,
+    summary="给指定机器人创建多动作任务",
+    tags=["任务管理"],
+    operation_id="create_multi_action_task_for_robot",
+    include_in_schema=True
+)
+async def create_multi_action_task_for_robot(
+    robot_id: str,
+    request_body: Dict[str, Any] = Body(
+        ...,
+        description="多动作任务创建请求（指定机器人）。支持两种格式：1) 直接发送actions和priority；2) 发送包含value字段的Swagger示例格式（自动提取value内容）。move_to动作支持两种方式：1) 使用target_pose指定坐标；2) 使用poi_name指定POI名称",
+        openapi_examples={
+            "1_单点移动_坐标": {
+                "summary": "1️⃣ 单点移动（坐标）- 最简单",
+                "description": "移动到指定坐标 (3.8, -2.9)。适用于已知目标坐标的场景。",
+                "value": {
+                    "actions": [
+                        {
+                            "action_type": "move_to",
+                            "target_pose": {
+                                "x": 3.8,
+                                "y": -2.9,
+                                "yaw": 0.0
+                            }
+                        }
+                    ]
+                }
+            },
+            "2_单点移动_POI": {
+                "summary": "2️⃣ 单点移动（POI）- 推荐",
+                "description": "移动到POI点 P04。POI名称可通过 GET /api/maps/pois 查询。",
+                "value": {
+                    "actions": [
+                        {
+                            "action_type": "move_to",
+                            "poi_name": "P04"
+                        }
+                    ]
+                }
+            },
+            "3_移动后等待": {
+                "summary": "3️⃣ 移动 + 等待",
+                "description": "移动到坐标后等待10秒。适用于需要停留的场景（如装卸货）。",
+                "value": {
+                    "actions": [
+                        {
+                            "action_type": "move_to",
+                            "target_pose": {
+                                "x": 3.8,
+                                "y": -2.9,
+                                "yaw": 0.0
+                            },
+                            "acceptable_precision": 0.3,
+                            "speed_ratio": 1.0
+                        },
+                        {
+                            "action_type": "wait",
+                            "wait_duration": 10.0
+                        }
+                    ],
+                    "priority": 2
+                }
+            },
+            "4_POI巡检": {
+                "summary": "4️⃣ 多点巡检（POI）",
+                "description": "依次移动到 P01 → P04 → P08，每个点等待5秒。适用于巡检任务。",
+                "value": {
+                    "actions": [
+                        {
+                            "action_type": "move_to",
+                            "poi_name": "P01"
+                        },
+                        {
+                            "action_type": "wait",
+                            "wait_duration": 5.0
+                        },
+                        {
+                            "action_type": "move_to",
+                            "poi_name": "P04"
+                        },
+                        {
+                            "action_type": "wait",
+                            "wait_duration": 5.0
+                        },
+                        {
+                            "action_type": "move_to",
+                            "poi_name": "P08"
+                        },
+                        {
+                            "action_type": "wait",
+                            "wait_duration": 5.0
+                        }
+                    ],
+                    "priority": 2
+                }
+            },
+            "5_任务后回桩": {
+                "summary": "5️⃣ 任务完成后自动回桩",
+                "description": "移动到POI → 等待 → 自动回充电桩。适用于单次任务后需要充电的场景。",
+                "value": {
+                    "actions": [
+                        {
+                            "action_type": "move_to",
+                            "poi_name": "P08",
+                            "acceptable_precision": 0.3
+                        },
+                        {
+                            "action_type": "wait",
+                            "wait_duration": 30.0
+                        },
+                        {
+                            "action_type": "go_home"
+                        }
+                    ],
+                    "priority": 2
+                }
+            },
+            "6_坐标POI混合": {
+                "summary": "6️⃣ 混合使用坐标和POI",
+                "description": "先移动到坐标 (5.0, 3.0) → 等待 → 移动到POI P08 → 回桩。展示坐标和POI的混合使用。",
+                "value": {
+                    "actions": [
+                        {
+                            "action_type": "move_to",
+                            "target_pose": {
+                                "x": 5.0,
+                                "y": 3.0,
+                                "yaw": 0.0
+                            },
+                            "acceptable_precision": 0.3,
+                            "speed_ratio": 1.0
+                        },
+                        {
+                            "action_type": "wait",
+                            "wait_duration": 10.0
+                        },
+                        {
+                            "action_type": "move_to",
+                            "poi_name": "P08",
+                            "acceptable_precision": 0.3
+                        },
+                        {
+                            "action_type": "go_home"
+                        }
+                    ],
+                    "priority": 2
+                }
+            },
+            "7_高级配置": {
+                "summary": "7️⃣ 高级配置（精确导航+朝向）",
+                "description": "使用高级参数：精确模式、指定朝向角度、自定义速度。适用于对位置和朝向有严格要求的场景。",
+                "value": {
+                    "actions": [
+                        {
+                            "action_type": "move_to",
+                            "target_pose": {
+                                "x": 3.8,
+                                "y": -2.9,
+                                "yaw": 1.57
+                            },
+                            "acceptable_precision": 0.1,
+                            "speed_ratio": 0.5,
+                            "mode": 0,
+                            "flags": ["precise", "with_yaw"],
+                            "fail_retry_count": 2
+                        },
+                        {
+                            "action_type": "wait",
+                            "wait_duration": 15.0
+                        }
+                    ],
+                    "priority": 3
+                }
+            },
+            "8_紧急任务": {
+                "summary": "8️⃣ 紧急高优先级任务",
+                "description": "使用最高优先级(priority=4)，会优先于其他任务执行。",
+                "value": {
+                    "actions": [
+                        {
+                            "action_type": "move_to",
+                            "poi_name": "P01",
+                            "acceptable_precision": 0.3,
+                            "speed_ratio": 1.0
+                        }
+                    ],
+                    "priority": 4
+                }
+            }
+        }
+    ),
+    task_scheduler: TaskScheduler = Depends(get_task_scheduler),
+    map_manager: MapManager = Depends(get_map_manager),
+    robot_manager: RobotManager = Depends(get_robot_manager)
+):
+    """
+    给指定机器人创建多动作任务
+    
+    返回完整的任务信息，包括 task_id、status、created_at 等。
+    使用返回的 task_id 可以查询任务状态：GET /api/tasks/{task_id}
+    
+    **重要说明：**
+    - 不需要配置 `start_pose`（已废弃），系统会根据机器人当前位置自动分配任务
+    - 只需指定 `actions`（动作序列）和 `robot_id`（机器人ID）即可
+    - 任务会直接分配给指定的机器人，不会自动选择
+    
+    **支持的动作类型：**
+    - **move_to**: 移动到目标点
+      - **方式1（坐标导航）**：使用 `target_pose` 指定坐标，简单可靠
+        ```json
+        {
+          "action_type": "move_to",
+          "target_pose": {"x": 5.0, "y": 3.0, "yaw": 0.0}
+        }
+        ```
+      - **方式2（POI导航）**：使用 `poi_name` 指定POI名称（需要先查询POI：GET /api/maps/pois）
+        ```json
+        {
+          "action_type": "move_to",
+          "poi_name": "P08"
+        }
+        ```
+      - **move_options 配置参数**（可选）：
+        - `mode`: 导航模式（0:Free navigation, 1:Strict Track, 2:Track priority），默认 0
+        - `flags`: 标志列表（如：`["precise", "with_yaw"]`），默认 `[]`
+        - `fail_retry_count`: 失败重试次数，默认 0
+        - `acceptable_precision`: 到达精度（米），默认 0.3
+        - `speed_ratio`: 速度比例，默认 1.0
+    - **wait**: 等待指定时间（需要 `wait_duration` > 0，单位：秒）
+    - **go_home**: 回桩（不需要额外参数）
+    
+    **注意事项：**
+    - ✅ **支持坐标导航**：使用 `target_pose` 指定坐标（x, y, yaw），简单可靠
+    - ✅ **支持POI导航**：使用 `poi_name` 指定POI名称，可通过 GET /api/maps/pois 查询可用POI
+    - ✅ **支持混合使用**：可以在同一个任务中混合使用坐标和POI
+    - 如果同时提供 `target_pose` 和 `poi_name`，系统优先使用 `poi_name` 进行POI导航
+    - 如果使用 `poi_name`，请确保POI名称正确，否则会出现 POI_NOT_FOUND 错误
+    - `priority` 可选，如果不指定则系统自动计算（1-4，1最低，4最高）
+    - 指定的机器人必须已注册且在线，否则会返回错误
+    
+    Args:
+        robot_id: 指定的机器人ID
+        request_body: 多动作任务创建请求（支持直接格式或包含value字段的格式）
+    
+    Returns:
+        Task: 创建的任务对象，包含 task_id、status、created_at 等字段
+    """
+    api_start = time.time()
+    
+    try:
+        # 验证机器人是否存在且在线
+        if robot_id not in robot_manager.robots:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Robot {robot_id} not found. Please register the robot first."
+            )
+        
+        # 检查机器人是否在线
+        try:
+            state = await robot_manager.get_robot_state(robot_id)
+            if state.status.value.lower() == "offline":
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Robot {robot_id} is offline. Cannot assign task to offline robot."
+                )
+        except Exception as e:
+            logger.warning(f"Failed to check robot {robot_id} status: {e}")
+            # 如果无法获取状态，仍然允许创建任务（可能是网络问题）
+        
+        # 支持从Swagger示例格式中提取value字段
+        if "value" in request_body and isinstance(request_body["value"], dict):
+            # 如果请求体包含value字段（Swagger示例格式），提取其内容
+            task_data = request_body["value"]
+            logger.debug("Extracting task data from 'value' field (Swagger example format)")
+        else:
+            # 直接使用请求体（标准格式）
+            task_data = request_body
+        
+        # 将dict转换为MultiActionTaskCreate对象
+        try:
+            task = MultiActionTaskCreate(**task_data)
+        except Exception as e:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Invalid request format: {str(e)}. Please check that 'actions' is a list and all required fields are present."
+            )
+        
+        logger.info(f"API: Received multi-action task creation request for robot {robot_id} with {len(task.actions)} actions, priority={task.priority}")
+        
+        # 最小化验证：只检查地图是否已加载（快速检查）
+        map_info = map_manager.get_map_info()
+        if not map_info:
+            raise HTTPException(
+                status_code=400,
+                detail="Map not loaded. Please load the map first using POST /api/maps/load"
+            )
+        
+        # 快速验证：只检查动作类型和必需参数，不验证坐标（坐标验证在任务分配时进行）
+        for i, action in enumerate(task.actions):
+            if action.action_type == "move_to":
+                # move_to动作必须提供target_pose或poi_name（快速检查）
+                has_target_pose = action.target_pose is not None
+                has_poi_name = action.poi_name is not None and action.poi_name.strip() != ""
+                
+                if not has_target_pose and not has_poi_name:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Action {i}: move_to requires either target_pose or poi_name"
+                    )
+            elif action.action_type == "wait":
+                if action.wait_duration is None or action.wait_duration <= 0:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Action {i}: wait requires wait_duration > 0"
+                    )
+            elif action.action_type == "go_home":
+                pass  # 回桩不需要额外参数
+            else:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Action {i}: unknown action type {action.action_type}"
+                )
+        
+        # 创建任务并直接分配给指定机器人
+        logger.info(f"API: Calling task_scheduler.create_multi_action_task_for_robot (robot_id={robot_id}, elapsed: {time.time() - api_start:.3f}s)")
+        logger.info("API: Starting multi-action task creation in scheduler for specified robot...")
+        try:
+            created_task = await task_scheduler.create_multi_action_task_for_robot(robot_id, task)
+            api_elapsed = time.time() - api_start
+            logger.info(f"API: Multi-action task created successfully for robot {robot_id}: task_id={created_task.task_id}, status={created_task.status.value}, {len(task.actions)} actions, elapsed={api_elapsed:.3f}s")
+        except Exception as e:
+            logger.error(f"API: Multi-action task creation failed in scheduler for robot {robot_id}: {e}", exc_info=True)
+            raise
+        
+        # 确保返回的任务包含 task_id
+        if not created_task.task_id:
+            raise HTTPException(status_code=500, detail="Task created but task_id is missing")
+        
+        # 确保 task_id 在响应中（显式验证）
+        logger.debug(f"Returning multi-action task with task_id: {created_task.task_id}, status: {created_task.status}, robot_id: {created_task.robot_id}")
+        
+        # 返回 Task 对象，FastAPI 会自动序列化为 JSON，包含所有字段包括 task_id
+        return created_task
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        api_elapsed = time.time() - api_start
+        logger.error(f"API: Failed to create multi-action task for robot {robot_id} after {api_elapsed:.3f}s: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to create multi-action task for robot {robot_id}: {str(e)}")
+
+
+@router.post(
+    "/multi-action",
+    response_model=Task,
+    summary="创建多动作任务（自动分配机器人）",
+    include_in_schema=True
+)
 async def create_multi_action_task(
     request_body: Dict[str, Any] = Body(
         ...,
