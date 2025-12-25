@@ -1151,7 +1151,8 @@
         // 计算数据哈希（简单版本，用于检测变化）
         function getDataHash(data) {
             if (!data) return null;
-            const robotsHash = JSON.stringify(data.robots || []).length;
+            // 优化：只统计机器人数量，不包含位置信息，避免位置变化触发全图重绘
+            const robotsHash = (data.robots || []).length;
             const tasksHash = JSON.stringify(data.tasks || []).length;
             // 包含虚拟墙和限行区域，确保它们变化时hash值会变化
             const virtualWallsHash = JSON.stringify(data.virtual_walls || []).length;
