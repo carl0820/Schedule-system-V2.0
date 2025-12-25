@@ -1158,11 +1158,15 @@
             // 使用完整的限行区域数据计算哈希，确保内容变化时能检测到
             const restrictedAreasHash = JSON.stringify(data.restricted_areas || []).replace(/\s/g, '');
             // 包含等待点配置，确保等待点配置变化时hash值会变化
-            const waitingPointsHash = JSON.stringify(data.waiting_points || []).replace(/\s/g, '');
+            // 优化：对数组排序后再计算hash，避免顺序变化导致不必要的重绘
+            const waitingPoints = (data.waiting_points || []).slice().sort();
+            const waitingPointsHash = JSON.stringify(waitingPoints);
+            // 包含POI数量，确保POI变化时能检测到
+            const poisHash = (data.pois || []).length;
             // 包含地图ID，确保地图切换时hash值会变化
             const mapId = data.map && data.map.info ? (data.map.info.map_id || '') : '';
             const mapHash = data.map ? (data.map.info ? JSON.stringify(data.map.info).length : 0) : 0;
-            return `${robotsHash}-${tasksHash}-${virtualWallsHash}-${restrictedAreasHash}-${waitingPointsHash}-${mapHash}-${mapId}`;
+            return `${robotsHash}-${tasksHash}-${virtualWallsHash}-${restrictedAreasHash}-${waitingPointsHash}-${poisHash}-${mapHash}-${mapId}`;
         }
         
         // 监听地图变化事件（从地图管理页面）
