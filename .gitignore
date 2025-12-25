@@ -49,3 +49,14 @@ logs/
 .coverage
 htmlcov/
 .pytest_cache/
+
+# Runtime data files (generated during execution)
+data/robots.json
+data/tasks.db
+data/tasks.db-shm
+data/tasks.db-wal
+data/*.db
+data/*.db-*
+
+# Claude Code local settings
+.claude/settings.local.json
