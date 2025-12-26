@@ -137,26 +137,52 @@ pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
 
 ### 步骤四：启动服务
 
-**方法1：使用启动脚本（推荐）**
+**方法1：智能启动脚本（强烈推荐）**
 
 ```powershell
-# 双击运行或使用PowerShell
+# 双击运行 start.bat
+# 或在PowerShell中执行
+.\start.bat
+# 或
+.\start.ps1
+```
+
+**智能脚本特性**：
+- ✅ 自动检测并选择正确的Python（支持多Python环境）
+- ✅ 自动排除MSYS2、Cygwin等不适合的Python
+- ✅ 自动检查依赖是否安装
+- ✅ 友好的错误提示和解决建议
+- ✅ 适用于任何Windows电脑，无需修改配置
+
+**方法2：一键部署脚本（首次部署推荐）**
+
+```powershell
+# 自动检测Python、安装依赖、启动服务
+.\deploy.bat
+# 或
+.\deploy.ps1
+```
+
+这个脚本会自动完成：
+1. 检测Python环境
+2. 安装所有依赖
+3. 启动服务
+
+**方法3：使用原始脚本**
+
+```powershell
 .\start_service.ps1
 ```
 
-**方法2：直接运行Python**
+**方法4：直接运行Python（需要python命令可用）**
 
 ```powershell
 python main.py
 ```
 
-**方法3：使用uvicorn（开发模式，支持热重载）**
+**方法5：使用uvicorn（开发模式，支持热重载）**
 
 ```powershell
-# 如果未安装uvicorn
-pip install uvicorn
-
-# 启动服务
 uvicorn main:app --host 0.0.0.0 --port 8092 --reload
 ```
 

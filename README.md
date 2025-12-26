@@ -36,7 +36,8 @@
 ## 🚀 快速开始
 
 **新用户请先查看快速部署指南**：
-- 💻 [Windows快速部署（无需Docker）](docs/WINDOWS_QUICK_DEPLOY.md) - **推荐Windows用户**
+- 🎯 [新手快速开始（3分钟）](docs/QUICKSTART_BEGINNER.md) - **完全零基础用户推荐**
+- 💻 [Windows快速部署（无需Docker）](docs/WINDOWS_QUICK_DEPLOY.md) - **Windows用户推荐**
 - 📖 [快速开始指南 - Windows（5分钟）](docs/QUICK_START.md)
 - 🍎 [快速开始指南 - Mac/Linux（5分钟）](docs/QUICK_START_MAC_LINUX.md)
 - 🐳 [Docker快速部署指南](docs/DOCKER_QUICK_START.md) - 适合有Docker环境的用户
@@ -163,27 +164,41 @@ docker-compose up -d --build
 
 ### 本地部署
 
-**Windows:**
-```powershell
-# 推荐使用便捷启动脚本
-.\start.ps1
+**Windows（推荐使用一键部署）:**
 
-# 或使用原始脚本
+```powershell
+# 方法1：一键部署（推荐，首次部署）
+.\deploy.bat          # 双击运行，或在PowerShell中执行
+# 或
+.\deploy.ps1          # 自动检测Python、安装依赖、启动服务
+
+# 方法2：快速启动（已安装依赖）
+.\start.bat           # 双击运行，或在PowerShell中执行
+# 或
+.\start.ps1           # 自动检测Python并启动
+
+# 方法3：使用原始脚本
 .\start_service.ps1
 
-# 或直接运行（如果python命令指向正确的Python）
+# 方法4：直接运行（需要python命令可用）
 python main.py
 ```
 
+**智能启动脚本特性：**
+- ✅ 自动检测并选择正确的Python（支持多Python环境）
+- ✅ 自动排除MSYS2、Cygwin等不适合的Python
+- ✅ 自动检查依赖安装状态
+- ✅ 友好的错误提示和解决建议
+- ✅ 适用于任何Windows电脑，无需修改配置
+
 **重要提示（Windows用户）：**
-- 如果系统中安装了多个Python（如MSYS2、Anaconda等），请确保使用带有pip的Python版本
+- 如果系统中安装了多个Python（如MSYS2、Anaconda等），我们的脚本会自动选择正确的Python
+- 如果自动检测失败，脚本会提供明确的安装指引
 - 检查Python版本：`python --version` 或 `where python`
-- 如果`python`命令指向错误的Python，请使用完整路径：
+- 手动指定Python路径（如需要）：
   ```powershell
-  # 示例：使用Python 3.13
   C:\Users\<用户名>\AppData\Local\Programs\Python\Python313\python.exe main.py
   ```
-- 或使用我们提供的 `start.ps1` 脚本，已配置正确的Python路径
 
 **Mac/Linux:**
 ```bash
