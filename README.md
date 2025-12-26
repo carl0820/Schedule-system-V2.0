@@ -36,8 +36,10 @@
 ## 🚀 快速开始
 
 **新用户请先查看快速部署指南**：
+- 💻 [Windows快速部署（无需Docker）](docs/WINDOWS_QUICK_DEPLOY.md) - **推荐Windows用户**
 - 📖 [快速开始指南 - Windows（5分钟）](docs/QUICK_START.md)
 - 🍎 [快速开始指南 - Mac/Linux（5分钟）](docs/QUICK_START_MAC_LINUX.md)
+- 🐳 [Docker快速部署指南](docs/DOCKER_QUICK_START.md) - 适合有Docker环境的用户
 - 📚 [详细部署指南](docs/QUICK_START_GUIDE.md)
 - 📖 [API文档](docs/API.md)
 
