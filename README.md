@@ -165,8 +165,25 @@ docker-compose up -d --build
 
 **Windows:**
 ```powershell
+# 推荐使用便捷启动脚本
+.\start.ps1
+
+# 或使用原始脚本
 .\start_service.ps1
+
+# 或直接运行（如果python命令指向正确的Python）
+python main.py
 ```
+
+**重要提示（Windows用户）：**
+- 如果系统中安装了多个Python（如MSYS2、Anaconda等），请确保使用带有pip的Python版本
+- 检查Python版本：`python --version` 或 `where python`
+- 如果`python`命令指向错误的Python，请使用完整路径：
+  ```powershell
+  # 示例：使用Python 3.13
+  C:\Users\<用户名>\AppData\Local\Programs\Python\Python313\python.exe main.py
+  ```
+- 或使用我们提供的 `start.ps1` 脚本，已配置正确的Python路径
 
 **Mac/Linux:**
 ```bash
@@ -180,6 +197,9 @@ uvicorn main:app --host 0.0.0.0 --port 8092 --reload
 
 服务启动后，访问：
 - **首页**: http://localhost:8092
+- **机器人管理**: http://localhost:8092/static/robot_list.html
+- **任务管理**: http://localhost:8092/static/task_list.html
+- **地图管理**: http://localhost:8092/static/map_management.html
 - **API文档**: http://localhost:8092/docs
 - **健康检查**: http://localhost:8092/health
 

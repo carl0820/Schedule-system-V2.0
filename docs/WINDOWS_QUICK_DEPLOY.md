@@ -24,7 +24,36 @@ python --version
 Python 3.11.x
 ```
 
-如果显示"未找到命令"或版本不在3.8-3.13范围内，请先安装Python：
+**⚠️ 重要：多Python环境检查**
+
+如果你的系统安装了多个Python（如MSYS2、Anaconda、Python.org等），请检查所有Python位置：
+
+```powershell
+# 查找所有Python安装
+where python
+
+# 示例输出可能包含：
+# C:\msys64\ucrt64\bin\python.exe          ❌ MSYS2 Python（通常没有pip）
+# C:\Users\用户名\AppData\Local\Programs\Python\Python313\python.exe  ✅ 官方Python
+# C:\Users\用户名\AppData\Local\Microsoft\WindowsApps\python.exe      ⚠️ Windows商店占位符
+```
+
+**如何选择正确的Python：**
+
+1. **检查是否有pip**：
+   ```powershell
+   python -m pip --version
+   ```
+   如果显示 "No module named pip"，说明当前Python不可用。
+
+2. **使用完整路径测试**：
+   ```powershell
+   # 测试官方Python 3.13
+   C:\Users\<用户名>\AppData\Local\Programs\Python\Python313\python.exe --version
+   C:\Users\<用户名>\AppData\Local\Programs\Python\Python313\python.exe -m pip --version
+   ```
+
+3. **如果没有合适的Python，请安装官方版本**：
 
 **下载地址**: https://www.python.org/downloads/
 
@@ -32,6 +61,7 @@ Python 3.11.x
 - ✅ 勾选 "Add Python to PATH"（重要！）
 - ✅ 选择 "Install Now" 或自定义安装路径
 - ✅ 安装完成后重新打开PowerShell
+- ✅ 确保新安装的Python在PATH的最前面
 
 ### 步骤二：下载代码
 
@@ -259,31 +289,68 @@ taskkill /PID <PID> /F
 # 或修改端口（编辑 main.py 中的 PORT 变量）
 ```
 
-### 2. Python未找到
+### 2. Python未找到或pip不可用
 
 **错误信息**：
 ```
 'python' 不是内部或外部命令
 ```
+或
+```
+No module named pip
+```
 
 **解决方法**：
 
-1. 确认Python已安装：在开始菜单搜索"Python"
-2. 将Python加入PATH：
-   - 找到Python安装路径（例如：`C:\Users\用户名\AppData\Local\Programs\Python\Python311`）
-   - 系统属性 → 环境变量 → Path → 新建 → 添加Python路径
+**情况1：系统有多个Python（MSYS2、Anaconda等）**
+
+这是最常见的问题！使用 `where python` 检查所有Python位置：
+
+```powershell
+where python
+
+# 可能的输出：
+# C:\msys64\ucrt64\bin\python.exe                    ❌ MSYS2（无pip）
+# C:\Users\用户名\AppData\Local\Programs\Python\Python313\python.exe  ✅ 官方Python
+```
+
+**解决方案**：
+
+1. **方法1：使用完整路径（最可靠）**
+   ```powershell
+   # 使用官方Python的完整路径
+   C:\Users\用户名\AppData\Local\Programs\Python\Python313\python.exe main.py
+
+   # 或使用提供的启动脚本（已配置正确路径）
+   .\start.ps1
+   ```
+
+2. **方法2：修改PATH环境变量**
+   - 系统属性 → 环境变量 → Path
+   - 将官方Python路径移到最前面
+   - 删除或移除MSYS2/Anaconda的Python路径
    - 重启PowerShell
 
-3. 或使用完整路径：
-```powershell
-C:\Users\用户名\AppData\Local\Programs\Python\Python311\python.exe main.py
-```
+3. **方法3：创建Python别名**
+   ```powershell
+   # 在PowerShell配置文件中添加
+   Set-Alias python3 "C:\Users\用户名\AppData\Local\Programs\Python\Python313\python.exe"
+
+   # 然后使用
+   python3 main.py
+   ```
+
+**情况2：Python确实未安装**
+
+1. 下载安装：https://www.python.org/downloads/
+2. ✅ 勾选 "Add Python to PATH"
+3. 安装后重启PowerShell
 
 ### 3. pip安装依赖失败
 
 **常见原因及解决方法**：
 
-**网络超时**：
+**问题1：网络超时**
 ```powershell
 # 使用国内镜像源
 pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
@@ -292,7 +359,7 @@ pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
 pip install -r requirements.txt -i https://mirrors.aliyun.com/pypi/simple/
 ```
 
-**代理问题**：
+**问题2：代理问题**
 ```powershell
 # 禁用代理
 $env:HTTP_PROXY=""
@@ -302,7 +369,41 @@ $env:HTTPS_PROXY=""
 pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
 ```
 
-**权限问题**：
+**问题3：某些包需要编译（如pydantic-core、numpy）**
+
+错误示例：
+```
+Rust not found
+Compiler c++ cannot compile programs
+```
+
+**解决方案**：
+
+1. **升级pip到最新版本**（支持更多预编译wheel）：
+   ```powershell
+   python -m pip install --upgrade pip
+   ```
+
+2. **只安装预编译的二进制包**：
+   ```powershell
+   pip install -r requirements.txt --only-binary=:all: -i https://pypi.tuna.tsinghua.edu.cn/simple
+   ```
+
+3. **跳过可选依赖**（numpy是可选的）：
+   ```powershell
+   # 先安装核心依赖
+   pip install fastapi uvicorn httpx pydantic requests -i https://pypi.tuna.tsinghua.edu.cn/simple
+
+   # numpy失败可以忽略（可选依赖）
+   pip install numpy -i https://pypi.tuna.tsinghua.edu.cn/simple || echo "numpy安装失败（可选依赖，可忽略）"
+   ```
+
+4. **使用我们提供的修复脚本**：
+   ```powershell
+   python fix_install_windows.ps1
+   ```
+
+**问题4：权限问题**
 ```powershell
 # 以管理员身份运行PowerShell
 # 或使用用户安装
