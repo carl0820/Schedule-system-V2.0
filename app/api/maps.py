@@ -720,3 +720,117 @@ async def get_restricted_areas(
         # 返回缓存的限行区域信息
         return map_manager.restricted_areas
 
+
+# ========== POI缓存管理 ==========
+
+# POI缓存存储（内存中）
+poi_cache = {
+    "pois": [],
+    "source_robot_id": None,
+    "cached_at": None
+}
+
+
+@router.get("/poi-cache/status")
+async def get_poi_cache_status():
+    """
+    获取POI缓存状态
+    """
+    from datetime import datetime
+    return {
+        "has_cache": len(poi_cache["pois"]) > 0,
+        "count": len(poi_cache["pois"]),
+        "source": poi_cache["source_robot_id"] or "-",
+        "cached_at": poi_cache["cached_at"].strftime("%Y-%m-%d %H:%M:%S") if poi_cache["cached_at"] else "-"
+    }
+
+
+@router.post("/poi-cache/load/{robot_id}")
+async def load_poi_cache(
+    robot_id: str,
+    robot_manager: RobotManager = Depends(get_robot_manager)
+):
+    """
+    从指定机器人加载POI并缓存
+    """
+    from datetime import datetime
+    import asyncio
+
+    try:
+        agent = robot_manager.get_robot_agent(robot_id)
+        if not agent:
+            raise HTTPException(status_code=404, detail=f"机器人 {robot_id} 未找到")
+
+        # 获取POI列表
+        pois = await asyncio.wait_for(
+            agent.get_all_pois(),
+            timeout=5.0
+        )
+
+        # 转换为字典列表并缓存
+        poi_cache["pois"] = [
+            {
+                "id": poi.id,
+                "display_name": poi.metadata.get("display_name", poi.id) if poi.metadata else poi.id,
+                "pose": {
+                    "x": poi.pose.x,
+                    "y": poi.pose.y,
+                    "yaw": poi.pose.yaw
+                } if poi.pose else None
+            }
+            for poi in pois
+        ]
+        poi_cache["source_robot_id"] = robot_id
+        poi_cache["cached_at"] = datetime.now()
+
+        logger.info(f"Loaded and cached {len(poi_cache['pois'])} POIs from robot {robot_id}")
+
+        return {
+            "success": True,
+            "count": len(poi_cache["pois"]),
+            "source": robot_id,
+            "cached_at": poi_cache["cached_at"].strftime("%Y-%m-%d %H:%M:%S")
+        }
+
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=504, detail="从机器人获取POI超时")
+    except Exception as e:
+        logger.error(f"Failed to load POI from robot {robot_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/poi-cache/refresh")
+async def refresh_poi_cache(
+    robot_manager: RobotManager = Depends(get_robot_manager)
+):
+    """
+    刷新POI缓存（从上次缓存的机器人重新加载）
+    """
+    if not poi_cache["source_robot_id"]:
+        raise HTTPException(status_code=400, detail="尚未加载POI缓存，请先从机器人加载")
+
+    # 复用load_poi_cache逻辑
+    return await load_poi_cache(poi_cache["source_robot_id"], robot_manager)
+
+
+@router.delete("/poi-cache/clear")
+async def clear_poi_cache():
+    """
+    清空POI缓存
+    """
+    poi_cache["pois"] = []
+    poi_cache["source_robot_id"] = None
+    poi_cache["cached_at"] = None
+
+    logger.info("POI cache cleared")
+
+    return {"success": True, "message": "POI缓存已清空"}
+
+
+@router.get("/poi-cache/pois")
+async def get_cached_pois():
+    """
+    获取缓存的POI列表（供主页面使用）
+    """
+    return poi_cache["pois"]
+

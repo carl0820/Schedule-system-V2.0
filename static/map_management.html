@@ -352,7 +352,35 @@
                 <button type="submit" class="btn btn-primary">从机器人加载地图</button>
             </form>
         </div>
-        
+
+        <div class="actions">
+            <h2>POI管理</h2>
+            <p style="color: #8E8E93; font-size: 0.875rem; margin-bottom: 1rem;">从机器人加载POI点并缓存，缓存后主页面将使用静态POI数据，避免频繁刷新导致闪烁</p>
+            <form id="loadPoiForm">
+                <div class="form-group">
+                    <label for="poiRobotSelect">选择机器人：</label>
+                    <select id="poiRobotSelect" required>
+                        <option value="">请选择机器人...</option>
+                    </select>
+                </div>
+                <div style="display: flex; gap: 0.75rem;">
+                    <button type="submit" class="btn btn-primary">加载并缓存POI</button>
+                    <button type="button" class="btn btn-secondary" onclick="refreshPoiCache()">刷新POI缓存</button>
+                    <button type="button" class="btn btn-secondary" onclick="clearPoiCache()">清空POI缓存</button>
+                </div>
+            </form>
+            <div id="poiStatus" style="margin-top: 1rem; padding: 1rem; background: #F2F2F7; border-radius: 10px; display: none;">
+                <div style="font-size: 0.875rem; color: #000;">
+                    <strong>当前POI缓存状态：</strong>
+                    <div style="margin-top: 0.5rem; color: #8E8E93;">
+                        <div>POI数量: <span id="poiCount">0</span></div>
+                        <div>数据来源: <span id="poiSource">-</span></div>
+                        <div>缓存时间: <span id="poiCacheTime">-</span></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
         <div class="actions">
             <h2>地图列表</h2>
             <div id="mapsContainer">
@@ -360,7 +388,7 @@
             </div>
         </div>
     </div>
-    
+
     <script>
         // 检查登录状态
         let token = localStorage.getItem('access_token');
@@ -447,11 +475,27 @@
                         select.appendChild(option);
                     });
                     console.log(`Added ${robots.length} robots to select`);
+
+                    // 同时填充POI机器人选择框
+                    const poiSelect = document.getElementById('poiRobotSelect');
+                    if (poiSelect) {
+                        poiSelect.innerHTML = '<option value="">请选择机器人...</option>';
+                        robots.forEach(robot => {
+                            const option = document.createElement('option');
+                            option.value = robot.robot_id;
+                            option.textContent = `${robot.robot_id} (${robot.base_url})`;
+                            poiSelect.appendChild(option);
+                        });
+                    }
+
                     showAlert(`成功加载 ${robots.length} 个机器人`, 'success');
                 } else {
                     console.warn('No robots found');
                     showAlert('未发现已注册的机器人，请先在机器人管理页面注册机器人', 'warning');
                 }
+
+                // 加载POI缓存状态
+                await loadPoiCacheStatus();
             } catch (error) {
                 console.error('Failed to load robots:', error);
                 console.error('Error stack:', error.stack);
@@ -648,12 +692,113 @@
             alert.className = `alert alert-${type}`;
             alert.textContent = message;
             container.appendChild(alert);
-            
+
             setTimeout(() => {
                 alert.remove();
             }, 3000);
         }
-        
+
+        // ========== POI管理功能 ==========
+
+        // 加载POI缓存状态
+        async function loadPoiCacheStatus() {
+            try {
+                const response = await fetch('/api/maps/poi-cache/status');
+                if (response.ok) {
+                    const data = await response.json();
+                    const statusDiv = document.getElementById('poiStatus');
+                    if (data.has_cache) {
+                        statusDiv.style.display = 'block';
+                        document.getElementById('poiCount').textContent = data.count || 0;
+                        document.getElementById('poiSource').textContent = data.source || '-';
+                        document.getElementById('poiCacheTime').textContent = data.cached_at || '-';
+                    } else {
+                        statusDiv.style.display = 'none';
+                    }
+                }
+            } catch (error) {
+                console.error('Failed to load POI cache status:', error);
+            }
+        }
+
+        // 加载并缓存POI
+        document.getElementById('loadPoiForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+
+            const robotId = document.getElementById('poiRobotSelect').value;
+            if (!robotId) {
+                showAlert('请选择机器人', 'error');
+                return;
+            }
+
+            try {
+                showAlert('正在从机器人加载POI...', 'info');
+
+                const response = await fetch(`/api/maps/poi-cache/load/${robotId}`, {
+                    method: 'POST'
+                });
+
+                if (response.ok) {
+                    const data = await response.json();
+                    showAlert(`成功加载并缓存 ${data.count} 个POI点`, 'success');
+                    await loadPoiCacheStatus();
+                } else {
+                    const error = await response.json();
+                    showAlert(`加载POI失败: ${error.detail || '未知错误'}`, 'error');
+                }
+            } catch (error) {
+                console.error('Failed to load POI:', error);
+                showAlert(`加载POI失败: ${error.message}`, 'error');
+            }
+        });
+
+        // 刷新POI缓存（从当前缓存的机器人重新加载）
+        async function refreshPoiCache() {
+            try {
+                showAlert('正在刷新POI缓存...', 'info');
+
+                const response = await fetch('/api/maps/poi-cache/refresh', {
+                    method: 'POST'
+                });
+
+                if (response.ok) {
+                    const data = await response.json();
+                    showAlert(`成功刷新POI缓存，共 ${data.count} 个POI点`, 'success');
+                    await loadPoiCacheStatus();
+                } else {
+                    const error = await response.json();
+                    showAlert(`刷新POI失败: ${error.detail || '未知错误'}`, 'error');
+                }
+            } catch (error) {
+                console.error('Failed to refresh POI:', error);
+                showAlert(`刷新POI失败: ${error.message}`, 'error');
+            }
+        }
+
+        // 清空POI缓存
+        async function clearPoiCache() {
+            if (!confirm('确定要清空POI缓存吗？清空后主页面将不显示POI点。')) {
+                return;
+            }
+
+            try {
+                const response = await fetch('/api/maps/poi-cache/clear', {
+                    method: 'DELETE'
+                });
+
+                if (response.ok) {
+                    showAlert('POI缓存已清空', 'success');
+                    await loadPoiCacheStatus();
+                } else {
+                    const error = await response.json();
+                    showAlert(`清空POI失败: ${error.detail || '未知错误'}`, 'error');
+                }
+            } catch (error) {
+                console.error('Failed to clear POI:', error);
+                showAlert(`清空POI失败: ${error.message}`, 'error');
+            }
+        }
+
         // 初始化
         window.onload = () => {
             loadRobots();

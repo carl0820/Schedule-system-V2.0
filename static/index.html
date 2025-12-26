@@ -798,6 +798,7 @@
                 </div>
                 <div style="display: flex; gap: 0.5rem;">
                     <button class="btn btn-secondary" onclick="toggleAutoRefresh()">自动刷新: <span id="autoRefreshStatus">开启</span></button>
+                    <button class="btn btn-secondary" onclick="loadCachedPois()" title="从缓存重新加载POI数据">刷新POI</button>
                 </div>
             </div>
         </div>
@@ -1057,6 +1058,7 @@
         let lastRobotPositions = {}; // 上次机器人位置（用于检测移动）
         let fastRefreshMode = false; // 快速刷新模式（机器人移动时）
         let fastRefreshCount = 0; // 快速刷新计数（连续快速刷新次数）
+        let cachedPois = []; // 缓存的POI数据（从地图管理页面加载）
         
         // 初始化下拉菜单（修复抖动问题）
         function initDropdown() {
@@ -1095,7 +1097,28 @@
                 }
             });
         }
-        
+
+        // 加载缓存的POI数据
+        async function loadCachedPois() {
+            try {
+                const response = await fetch(`${API_BASE}/api/maps/poi-cache/pois`);
+                if (response.ok) {
+                    cachedPois = await response.json();
+                    console.log(`[POI CACHE] Loaded ${cachedPois.length} cached POIs`);
+                    // 如果已经有地图数据，重绘动态元素以显示新的POI
+                    if (mapData && mapData.map) {
+                        drawDynamicElements();
+                    }
+                } else {
+                    console.log('[POI CACHE] No cached POIs available');
+                    cachedPois = [];
+                }
+            } catch (error) {
+                console.error('[POI CACHE] Failed to load cached POIs:', error);
+                cachedPois = [];
+            }
+        }
+
         // 初始化
         window.onload = function() {
             try {
@@ -1121,6 +1144,8 @@
                 updateConnectionStatus('connecting', '正在连接...');
                 // 初始化地图交互
                 initMapInteraction();
+                // 加载缓存的POI数据
+                loadCachedPois();
                 // 默认开启自动刷新
                 toggleAutoRefresh();
                 // 立即执行一次数据刷新
@@ -1352,7 +1377,8 @@
                 // updateRobotList(data.robots || []);
                 // 不再在主页面显示任务列表，改为跳转到独立页面
                 // updateTaskList(data.tasks || []);
-                updatePoiSelector(data.pois || []);
+                // 使用缓存的POI数据，而不是实时获取（避免闪烁）
+                updatePoiSelector(cachedPois || []);
                 
                 // 检测机器人是否在移动（智能刷新策略）
                 const robots = data.robots || [];
@@ -2246,29 +2272,29 @@
                 });
             }
             
-            // 绘制POI点
-            if (mapData.pois && Array.isArray(mapData.pois) && mapData.pois.length > 0) {
+            // 绘制POI点（使用缓存的POI数据，避免频繁刷新导致闪烁）
+            if (cachedPois && Array.isArray(cachedPois) && cachedPois.length > 0) {
                 // 获取等待点列表（用于区分颜色）
                 const waitingPoints = mapData.waiting_points || [];
-                console.log(`[POI] Drawing ${mapData.pois.length} POIs on map`);
+                console.log(`[POI CACHE] Drawing ${cachedPois.length} cached POIs on map`);
                 console.log(`[WAITING POINTS] Waiting points config:`, waitingPoints);
-                
-                mapData.pois.forEach(poi => {
+
+                cachedPois.forEach(poi => {
                     if (poi.pose) {
                         const mapX = Math.floor((poi.pose.x - mapInfo.origin_x) / mapInfo.resolution);
                         const mapY = Math.floor((poi.pose.y - mapInfo.origin_y) / mapInfo.resolution);
                         const x = offsetX + mapX * scale;
                         const y = offsetY + mapY * scale;
-                        
+
                         // 检查是否是等待点（支持display_name和id匹配）
                         const poiName = poi.display_name || poi.id;
                         const poiId = poi.id;
                         const isWaitingPoint = waitingPoints.includes(poiName) || waitingPoints.includes(poiId);
-                        
+
                         if (isWaitingPoint) {
                             console.log(`[WAITING POINTS] POI "${poiName}" (ID: ${poiId}) is a waiting point, using orange color`);
                         }
-                        
+
                         // 根据是否是等待点选择颜色
                         let poiColor = '#9b59b6'; // 默认紫色
                         let poiSize = 4;
@@ -2276,13 +2302,13 @@
                             poiColor = '#ff9800'; // 橙色（等待点）
                             poiSize = 6; // 等待点稍微大一点，更醒目
                         }
-                        
+
                         // 绘制POI圆形
                         ctx.fillStyle = poiColor;
                         ctx.beginPath();
                         ctx.arc(x, y, poiSize * scale, 0, Math.PI * 2);
                         ctx.fill();
-                        
+
                         // 如果是等待点，添加外圈高亮
                         if (isWaitingPoint) {
                             ctx.strokeStyle = poiColor;
@@ -2291,7 +2317,7 @@
                             ctx.arc(x, y, (poiSize + 2) * scale, 0, Math.PI * 2);
                             ctx.stroke();
                         }
-                        
+
                         // 绘制POI标签
                         ctx.fillStyle = poiColor;
                         ctx.font = `${10 * scale}px Arial`;
@@ -2431,7 +2457,8 @@
                     if (data) {
                         mapData = data;
                         updateStatus(data);
-                        updatePoiSelector(data.pois || []);
+                        // 使用缓存的POI数据，而不是实时获取（避免闪烁）
+                        updatePoiSelector(cachedPois || []);
                         drawDynamicElements(); // 只更新动态元素，不重绘整个地图
                     }
                 }
