@@ -3778,11 +3778,11 @@ class TaskScheduler:
                                 dock_pose = await agent.get_home_dock_pose()
                             except Exception as e:
                                 logger.debug(f"Failed to get home dock pose for robot {task.robot_id}: {e}")
-                            
+
                             # 如果获取到充电桩坐标，使用实际坐标；否则使用原点作为后备
                             if dock_pose:
                                 distance_to_dock = math.sqrt(
-                                    (robot_state.pose.x - dock_pose.x) ** 2 + 
+                                    (robot_state.pose.x - dock_pose.x) ** 2 +
                                     (robot_state.pose.y - dock_pose.y) ** 2
                                 )
                                 dock_distance = distance_to_dock
@@ -3792,26 +3792,36 @@ class TaskScheduler:
                                 distance_to_origin = math.sqrt(robot_state.pose.x ** 2 + robot_state.pose.y ** 2)
                                 dock_distance = distance_to_origin
                                 dock_location = "origin (0,0)"
-                            
+
                             # GO_HOME动作必须真正到达充电桩才能完成
-                            # 要求：1) 机器人在充电桩附近（距离<1.5m） 2) 状态为idle 3) 没有正在执行的action
+                            # 修复：优化完成检测逻辑
+                            # 1) 机器人在充电桩附近（距离<1.5m）
+                            # 2) 状态为idle
+                            # 3) 没有正在执行的action（或action已完成/被清除）
                             if dock_distance < 1.5 and robot_state.status.value == "idle":
                                 # 检查机器人当前是否有正在执行的action
-                                current_action = await agent.get_current_action()
-                                if current_action is None or (hasattr(current_action, 'action_id') and current_action.action_id != task.action_id):
+                                try:
+                                    current_action = await agent.get_current_action()
+                                    # 如果没有当前action，或者当前action不是这个任务的action，说明GO_HOME已完成
+                                    if current_action is None or (hasattr(current_action, 'action_id') and current_action.action_id != task.action_id):
+                                        logger.info(
+                                            f"Task {task.task_id} GO_HOME action: robot {task.robot_id} is at charging dock "
+                                            f"(distance={dock_distance:.2f}m < 1.5m from {dock_location}, status=idle, no current_action or different action_id). "
+                                            f"Action status={status}, robot is at dock. Marking GO_HOME as completed."
+                                        )
+                                        # 标记GO_HOME动作完成
+                                        await self._handle_multi_action_completion(task, agent, task.robot_id, task.current_action_index)
+                                        return
+                                except Exception as e:
+                                    # 如果无法获取current_action（可能是404/400），说明action已被清除
+                                    # 机器人在充电桩且idle，可以认为GO_HOME已完成
                                     logger.info(
                                         f"Task {task.task_id} GO_HOME action: robot {task.robot_id} is at charging dock "
-                                        f"(distance={dock_distance:.2f}m < 1.5m from {dock_location}, status=idle, no current_action or different action_id). "
-                                        f"Action status={status}, robot is at dock. Marking GO_HOME as completed."
+                                        f"(distance={dock_distance:.2f}m < 1.5m from {dock_location}, status=idle, cannot get current_action: {e}). "
+                                        f"Assuming GO_HOME completed. Marking as completed."
                                     )
-                                    # 标记GO_HOME动作完成
                                     await self._handle_multi_action_completion(task, agent, task.robot_id, task.current_action_index)
                                     return
-                                else:
-                                    logger.debug(
-                                        f"Task {task.task_id} GO_HOME action: robot {task.robot_id} is near dock "
-                                        f"(distance={dock_distance:.2f}m) but still has active action. Waiting for completion."
-                                    )
                             else:
                                 # 机器人不在充电桩附近，即使状态是idle也不应该认为完成
                                 if robot_state.status.value == "idle" and not robot_state.current_action_id:
