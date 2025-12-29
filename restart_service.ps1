@@ -73,17 +73,27 @@ Write-Host ""
 Write-Host "[2/2] Starting new service..." -ForegroundColor Yellow
 Write-Host ""
 
-# Check virtual environment
+# Check Python installation
 $pythonPath = $null
-if (Test-Path "venv\Scripts\python.exe") {
+
+# Priority 1: Use Python 3.13 (known working installation)
+$python313Path = "C:\Users\lemon.li\AppData\Local\Programs\Python\Python313\python.exe"
+if (Test-Path $python313Path) {
+    $pythonPath = $python313Path
+    Write-Host "[OK] Using Python 3.13: $python313Path" -ForegroundColor Green
+}
+# Priority 2: Try virtual environment
+elseif (Test-Path "venv\Scripts\python.exe") {
     $pythonPath = "venv\Scripts\python.exe"
     Write-Host "[OK] Using virtual environment: venv\Scripts\python.exe" -ForegroundColor Green
 } elseif (Test-Path "venv\bin\python.exe") {
     $pythonPath = "venv\bin\python.exe"
     Write-Host "[OK] Using virtual environment: venv\bin\python.exe" -ForegroundColor Green
-} else {
+}
+# Priority 3: Use system Python
+else {
     $pythonPath = "python"
-    Write-Host "[WARN] Virtual environment not found, using system Python" -ForegroundColor Yellow
+    Write-Host "[WARN] Using system Python (may not work correctly)" -ForegroundColor Yellow
 }
 
 # Check if main.py exists

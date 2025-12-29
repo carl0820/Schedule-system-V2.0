@@ -151,6 +151,48 @@ if ($missingPackages.Count -gt 0) {
     }
 }
 
+# Check if port 8092 is already in use
+Write-Host ""
+Write-Host "[INFO] Checking if port 8092 is available..." -ForegroundColor Yellow
+try {
+    $portCheck = Get-NetTCPConnection -LocalPort 8092 -ErrorAction SilentlyContinue
+    if ($portCheck) {
+        Write-Host ""
+        Write-Host "[ERROR] Port 8092 is already in use!" -ForegroundColor Red
+        Write-Host ""
+        Write-Host "Process using port 8092:" -ForegroundColor Yellow
+        foreach ($conn in $portCheck) {
+            $proc = Get-Process -Id $conn.OwningProcess -ErrorAction SilentlyContinue
+            if ($proc) {
+                Write-Host "  PID $($conn.OwningProcess): $($proc.ProcessName)" -ForegroundColor White
+            }
+        }
+        Write-Host ""
+        Write-Host "Options:" -ForegroundColor Cyan
+        Write-Host "1. Use restart_service.ps1 to automatically stop and restart" -ForegroundColor White
+        Write-Host "2. Manually stop the process and try again" -ForegroundColor White
+        Write-Host ""
+        $stopNow = Read-Host "Stop existing service and start new one? (y/N)"
+        if ($stopNow -eq "y" -or $stopNow -eq "Y") {
+            Write-Host ""
+            Write-Host "[INFO] Stopping existing service..." -ForegroundColor Yellow
+            foreach ($conn in $portCheck) {
+                try {
+                    Stop-Process -Id $conn.OwningProcess -Force -ErrorAction Stop
+                    Write-Host "[OK] Stopped process $($conn.OwningProcess)" -ForegroundColor Green
+                } catch {
+                    Write-Host "[ERROR] Failed to stop process $($conn.OwningProcess)" -ForegroundColor Red
+                }
+            }
+            Start-Sleep -Seconds 2
+        } else {
+            exit 1
+        }
+    }
+} catch {
+    # Port check failed, continue anyway
+}
+
 # Start service
 Write-Host ""
 Write-Host "============================================================" -ForegroundColor Cyan
