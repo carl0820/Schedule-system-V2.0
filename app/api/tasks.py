@@ -489,29 +489,44 @@ async def list_tasks(
         
         # 计算统计信息（从数据库查询完整统计，而不是只基于当前页）
         # 优化：并发查询所有状态的统计信息
+        # 注意：如果有时间筛选，需要基于筛选后的任务计算统计，而不是全局统计
         try:
-            stats_tasks = await asyncio.wait_for(
-                asyncio.gather(
-                    task_scheduler.count_tasks(status=TaskStatus.PENDING, robot_id=robot_id),
-                    task_scheduler.count_tasks(status=TaskStatus.ASSIGNED, robot_id=robot_id),
-                    task_scheduler.count_tasks(status=TaskStatus.EXECUTING, robot_id=robot_id),
-                    task_scheduler.count_tasks(status=TaskStatus.COMPLETED, robot_id=robot_id),
-                    task_scheduler.count_tasks(status=TaskStatus.FAILED, robot_id=robot_id),
-                    task_scheduler.count_tasks(status=TaskStatus.CANCELLED, robot_id=robot_id),
-                    return_exceptions=True
-                ),
-                timeout=5.0  # 增加超时时间到5秒
-            )
-            stats = {
-                "total": total,
-                "pending": stats_tasks[0] if not isinstance(stats_tasks[0], Exception) else 0,
-                "assigned": stats_tasks[1] if not isinstance(stats_tasks[1], Exception) else 0,
-                "executing": stats_tasks[2] if not isinstance(stats_tasks[2], Exception) else 0,
-                "completed": stats_tasks[3] if not isinstance(stats_tasks[3], Exception) else 0,
-                "failed": stats_tasks[4] if not isinstance(stats_tasks[4], Exception) else 0,
-                "cancelled": stats_tasks[5] if not isinstance(stats_tasks[5], Exception) else 0
-            }
-            logger.info(f"Stats computed from database: total={total}, completed={stats['completed']}, failed={stats['failed']}, cancelled={stats['cancelled']}")
+            if start_date or end_date:
+                # 有时间筛选时，基于筛选后的结果计算统计
+                stats = {
+                    "total": total,
+                    "pending": sum(1 for t in result if t.get("status") == "pending"),
+                    "assigned": sum(1 for t in result if t.get("status") == "assigned"),
+                    "executing": sum(1 for t in result if t.get("status") == "executing"),
+                    "completed": sum(1 for t in result if t.get("status") == "completed"),
+                    "failed": sum(1 for t in result if t.get("status") == "failed"),
+                    "cancelled": sum(1 for t in result if t.get("status") == "cancelled")
+                }
+                logger.info(f"Stats computed from filtered results (date range: {start_date} to {end_date}): total={total}, completed={stats['completed']}, failed={stats['failed']}, cancelled={stats['cancelled']}")
+            else:
+                # 没有时间筛选时，查询数据库获取准确统计
+                stats_tasks = await asyncio.wait_for(
+                    asyncio.gather(
+                        task_scheduler.count_tasks(status=TaskStatus.PENDING, robot_id=robot_id),
+                        task_scheduler.count_tasks(status=TaskStatus.ASSIGNED, robot_id=robot_id),
+                        task_scheduler.count_tasks(status=TaskStatus.EXECUTING, robot_id=robot_id),
+                        task_scheduler.count_tasks(status=TaskStatus.COMPLETED, robot_id=robot_id),
+                        task_scheduler.count_tasks(status=TaskStatus.FAILED, robot_id=robot_id),
+                        task_scheduler.count_tasks(status=TaskStatus.CANCELLED, robot_id=robot_id),
+                        return_exceptions=True
+                    ),
+                    timeout=5.0  # 增加超时时间到5秒
+                )
+                stats = {
+                    "total": total,
+                    "pending": stats_tasks[0] if not isinstance(stats_tasks[0], Exception) else 0,
+                    "assigned": stats_tasks[1] if not isinstance(stats_tasks[1], Exception) else 0,
+                    "executing": stats_tasks[2] if not isinstance(stats_tasks[2], Exception) else 0,
+                    "completed": stats_tasks[3] if not isinstance(stats_tasks[3], Exception) else 0,
+                    "failed": stats_tasks[4] if not isinstance(stats_tasks[4], Exception) else 0,
+                    "cancelled": stats_tasks[5] if not isinstance(stats_tasks[5], Exception) else 0
+                }
+                logger.info(f"Stats computed from database: total={total}, completed={stats['completed']}, failed={stats['failed']}, cancelled={stats['cancelled']}")
         except asyncio.TimeoutError:
             logger.warning("Stats query timeout, using page-based stats")
             # 如果查询超时，回退到基于当前页的统计
