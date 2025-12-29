@@ -103,54 +103,44 @@ if (-not (Test-Path "main.py")) {
     exit 1
 }
 
-# Start service
-try {
-    if ($Background) {
-        # Run in background (no window)
-        $process = Start-Process -FilePath $pythonPath -ArgumentList "main.py" -WindowStyle Hidden -PassThru
-        Write-Host "[OK] Service started in background (Process ID: $($process.Id))" -ForegroundColor Green
-    } else {
-        # Run in foreground (show window)
-        $process = Start-Process -FilePath $pythonPath -ArgumentList "main.py" -PassThru
-        Write-Host "[OK] Service started (Process ID: $($process.Id))" -ForegroundColor Green
-    }
-    
-    # Wait for service to start
-    Write-Host "Waiting for service to initialize..." -ForegroundColor Yellow
-    Start-Sleep -Seconds 3
-    
-    # Check if service started successfully
-    $checkProcs = Get-NetTCPConnection -LocalPort $PORT -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique
-    if ($checkProcs) {
-        Write-Host ""
-        Write-Host "========================================" -ForegroundColor Green
-        Write-Host "  Service restarted successfully!" -ForegroundColor Green
-        Write-Host "========================================" -ForegroundColor Green
-        Write-Host ""
-        Write-Host "  Process ID: $($checkProcs -join ', ')" -ForegroundColor Cyan
-        Write-Host "  Service URL: http://localhost:$PORT" -ForegroundColor Cyan
-        Write-Host "  API Docs: http://localhost:$PORT/docs" -ForegroundColor Cyan
-        Write-Host "  Homepage: http://localhost:$PORT/" -ForegroundColor Cyan
-        Write-Host ""
-        
-        # Try to check service health
-        try {
-            $response = Invoke-RestMethod -Uri "http://localhost:$PORT/health" -TimeoutSec 2 -ErrorAction SilentlyContinue
-            Write-Host "[OK] Service health check: OK" -ForegroundColor Green
-        } catch {
-            Write-Host "[WARN] Service health check: Not responding (may still be starting)" -ForegroundColor Yellow
-        }
-    } else {
-        Write-Host ""
-        Write-Host "[WARN] Service process started but port 8000 is not listening yet" -ForegroundColor Yellow
-        Write-Host "   Please wait a moment, or check the log file logs\app.log" -ForegroundColor Yellow
-    }
-} catch {
+# Additional wait to ensure port is fully released
+Write-Host "Ensuring port is fully released..." -ForegroundColor Yellow
+Start-Sleep -Seconds 3
+
+# Final port check before starting
+$finalCheck = Get-NetTCPConnection -LocalPort $PORT -ErrorAction SilentlyContinue
+if ($finalCheck) {
     Write-Host ""
-    Write-Host "[ERROR] Failed to start service" -ForegroundColor Red
-    Write-Host "   Error: $_" -ForegroundColor Red
+    Write-Host "[ERROR] Port $PORT is still in use after cleanup!" -ForegroundColor Red
+    Write-Host "Please run diagnose.ps1 to investigate, or try again in 30 seconds" -ForegroundColor Yellow
     exit 1
 }
+
+# Start service
+Write-Host ""
+Write-Host "============================================================" -ForegroundColor Cyan
+Write-Host "[INFO] Starting service..." -ForegroundColor Green
+Write-Host "============================================================" -ForegroundColor Cyan
+Write-Host ""
+Write-Host "Service will start on: http://localhost:$PORT" -ForegroundColor Cyan
+Write-Host ""
+Write-Host "After startup, access:" -ForegroundColor Cyan
+Write-Host "  - Homepage:     http://localhost:$PORT" -ForegroundColor White
+Write-Host "  - API Docs:     http://localhost:$PORT/docs" -ForegroundColor White
+Write-Host "  - Robot List:   http://localhost:$PORT/static/robot_list.html" -ForegroundColor White
+Write-Host "  - Task List:    http://localhost:$PORT/static/task_list.html" -ForegroundColor White
+Write-Host ""
+Write-Host "Press Ctrl+C to stop the service" -ForegroundColor Gray
+Write-Host ""
+Write-Host "============================================================" -ForegroundColor Cyan
+Write-Host ""
+
+# Change to script directory
+Set-Location $PSScriptRoot
+
+# Start service in foreground (blocking mode)
+# This ensures we see all output and the service runs in this terminal
+& $pythonPath main.py
 
 Write-Host ""
 Write-Host "Tip: Use stop_service.ps1 to stop the service" -ForegroundColor Gray
