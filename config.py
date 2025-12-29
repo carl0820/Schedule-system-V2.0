@@ -20,7 +20,7 @@ class Settings(BaseSettings):
     
     # 应用配置
     APP_NAME: str = "多机器人调度系统"
-    APP_VERSION: str = "1.5.0"
+    APP_VERSION: str = "2.0.1-rc1"
     DEBUG: bool = False
     
     # 服务器配置
