@@ -151,16 +151,16 @@ if ($missingPackages.Count -gt 0) {
     }
 }
 
-# Check if port 8092 is already in use
+# Check if port 9092 is already in use
 Write-Host ""
-Write-Host "[INFO] Checking if port 8092 is available..." -ForegroundColor Yellow
+Write-Host "[INFO] Checking if port 9092 is available..." -ForegroundColor Yellow
 try {
-    $portCheck = Get-NetTCPConnection -LocalPort 8092 -ErrorAction SilentlyContinue
+    $portCheck = Get-NetTCPConnection -LocalPort 9092 -ErrorAction SilentlyContinue
     if ($portCheck) {
         Write-Host ""
-        Write-Host "[ERROR] Port 8092 is already in use!" -ForegroundColor Red
+        Write-Host "[ERROR] Port 9092 is already in use!" -ForegroundColor Red
         Write-Host ""
-        Write-Host "Process using port 8092:" -ForegroundColor Yellow
+        Write-Host "Process using port 9092:" -ForegroundColor Yellow
         foreach ($conn in $portCheck) {
             $proc = Get-Process -Id $conn.OwningProcess -ErrorAction SilentlyContinue
             if ($proc) {
@@ -200,11 +200,11 @@ Write-Host "[INFO] Starting service..." -ForegroundColor Green
 Write-Host "============================================================" -ForegroundColor Cyan
 Write-Host ""
 Write-Host "After service starts, access:" -ForegroundColor Cyan
-Write-Host "  Homepage:        http://localhost:8092" -ForegroundColor Yellow
-Write-Host "  Robot Mgmt:      http://localhost:8092/static/robot_list.html" -ForegroundColor Yellow
-Write-Host "  Task Mgmt:       http://localhost:8092/static/task_list.html" -ForegroundColor Yellow
-Write-Host "  Map Mgmt:        http://localhost:8092/static/map_management.html" -ForegroundColor Yellow
-Write-Host "  API Docs:        http://localhost:8092/docs" -ForegroundColor Yellow
+Write-Host "  Homepage:        http://localhost:9092" -ForegroundColor Yellow
+Write-Host "  Robot Mgmt:      http://localhost:9092/static/robot_list.html" -ForegroundColor Yellow
+Write-Host "  Task Mgmt:       http://localhost:9092/static/task_list.html" -ForegroundColor Yellow
+Write-Host "  Map Mgmt:        http://localhost:9092/static/map_management.html" -ForegroundColor Yellow
+Write-Host "  API Docs:        http://localhost:9092/docs" -ForegroundColor Yellow
 Write-Host ""
 Write-Host "Press Ctrl+C to stop service" -ForegroundColor Gray
 Write-Host ""

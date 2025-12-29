@@ -1,19 +1,19 @@
-# Diagnostic Script for Port 8092 Issues
-# Helps identify why the service cannot bind to port 8092
+# Diagnostic Script for Port 9092 Issues
+# Helps identify why the service cannot bind to port 9092
 
 Write-Host "============================================================" -ForegroundColor Cyan
-Write-Host "Port 8092 Diagnostic Tool" -ForegroundColor Cyan
+Write-Host "Port 9092 Diagnostic Tool" -ForegroundColor Cyan
 Write-Host "============================================================" -ForegroundColor Cyan
 Write-Host ""
 
-# Test 1: Check if port 8092 is in use
-Write-Host "[TEST 1] Checking if port 8092 is currently in use..." -ForegroundColor Yellow
+# Test 1: Check if port 9092 is in use
+Write-Host "[TEST 1] Checking if port 9092 is currently in use..." -ForegroundColor Yellow
 try {
-    $connections = Get-NetTCPConnection -LocalPort 8092 -ErrorAction SilentlyContinue
+    $connections = Get-NetTCPConnection -LocalPort 9092 -ErrorAction SilentlyContinue
     if ($connections) {
-        Write-Host "[ISSUE FOUND] Port 8092 is currently in use!" -ForegroundColor Red
+        Write-Host "[ISSUE FOUND] Port 9092 is currently in use!" -ForegroundColor Red
         Write-Host ""
-        Write-Host "Processes using port 8092:" -ForegroundColor Yellow
+        Write-Host "Processes using port 9092:" -ForegroundColor Yellow
         foreach ($conn in $connections) {
             $proc = Get-Process -Id $conn.OwningProcess -ErrorAction SilentlyContinue
             if ($proc) {
@@ -30,10 +30,10 @@ try {
             Write-Host "  Stop-Process -Id $($conn.OwningProcess) -Force" -ForegroundColor White
         }
     } else {
-        Write-Host "[OK] Port 8092 is not in use" -ForegroundColor Green
+        Write-Host "[OK] Port 9092 is not in use" -ForegroundColor Green
     }
 } catch {
-    Write-Host "[OK] Port 8092 appears to be available" -ForegroundColor Green
+    Write-Host "[OK] Port 9092 appears to be available" -ForegroundColor Green
 }
 
 Write-Host ""
@@ -63,15 +63,15 @@ Write-Host ""
 Write-Host "============================================================" -ForegroundColor Cyan
 Write-Host ""
 
-# Test 3: Check if we can listen on port 8092
-Write-Host "[TEST 3] Testing if we can bind to port 8092..." -ForegroundColor Yellow
+# Test 3: Check if we can listen on port 9092
+Write-Host "[TEST 3] Testing if we can bind to port 9092..." -ForegroundColor Yellow
 try {
-    $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Any, 8092)
+    $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Any, 9092)
     $listener.Start()
     $listener.Stop()
-    Write-Host "[OK] Successfully bound to port 8092 (test passed)" -ForegroundColor Green
+    Write-Host "[OK] Successfully bound to port 9092 (test passed)" -ForegroundColor Green
 } catch {
-    Write-Host "[ISSUE FOUND] Cannot bind to port 8092!" -ForegroundColor Red
+    Write-Host "[ISSUE FOUND] Cannot bind to port 9092!" -ForegroundColor Red
     Write-Host "Error: $_" -ForegroundColor Red
     Write-Host ""
     Write-Host "Possible causes:" -ForegroundColor Yellow
@@ -86,13 +86,13 @@ Write-Host "============================================================" -Foreg
 Write-Host ""
 
 # Test 4: Check firewall rules
-Write-Host "[TEST 4] Checking Windows Firewall rules for port 8092..." -ForegroundColor Yellow
+Write-Host "[TEST 4] Checking Windows Firewall rules for port 9092..." -ForegroundColor Yellow
 try {
     $firewallRules = Get-NetFirewallPortFilter -ErrorAction SilentlyContinue |
-                     Where-Object { $_.LocalPort -eq 8092 }
+                     Where-Object { $_.LocalPort -eq 9092 }
 
     if ($firewallRules) {
-        Write-Host "[INFO] Found firewall rules for port 8092:" -ForegroundColor Yellow
+        Write-Host "[INFO] Found firewall rules for port 9092:" -ForegroundColor Yellow
         foreach ($rule in $firewallRules) {
             $parentRule = Get-NetFirewallRule -AssociatedNetFirewallPortFilter $rule -ErrorAction SilentlyContinue
             if ($parentRule) {
@@ -103,7 +103,7 @@ try {
             }
         }
     } else {
-        Write-Host "[INFO] No specific firewall rules found for port 8092" -ForegroundColor Gray
+        Write-Host "[INFO] No specific firewall rules found for port 9092" -ForegroundColor Gray
         Write-Host "      (This is usually OK - Windows will prompt when needed)" -ForegroundColor Gray
     }
 } catch {
@@ -137,7 +137,7 @@ Write-Host "============================================================" -Foreg
 Write-Host ""
 
 Write-Host "Next steps:" -ForegroundColor Cyan
-Write-Host "1. If port 8092 is in use, stop the conflicting process" -ForegroundColor White
+Write-Host "1. If port 9092 is in use, stop the conflicting process" -ForegroundColor White
 Write-Host "2. If bind test failed, wait 60 seconds and try again" -ForegroundColor White
 Write-Host "3. Try running PowerShell as Administrator" -ForegroundColor White
 Write-Host "4. Use start_safe.ps1 to automatically handle port conflicts" -ForegroundColor White
